@@ -1,0 +1,51 @@
+// 케이스 6종 정의. 나중에 서버가 이 목록을 내려주게 바꿀 예정
+export const CASES = [
+  {
+    id: "cantilever",
+    name: "외팔보",
+    kind: "검증",
+    method: "단일 해석",
+    criterion: "이론값 대비 오차",
+    ready: false,
+  },
+  {
+    id: "pressure_vessel",
+    name: "압력용기",
+    kind: "최적화",
+    method: "이웃 탐색",
+    criterion: "최대응력 ≤ 180 MPa",
+    ready: true,
+  },
+  {
+    id: "flange",
+    name: "플랜지 파이프",
+    kind: "최적화",
+    method: "이분법",
+    criterion: "최대응력 ≤ 30 MPa",
+    ready: false,
+  },
+  {
+    id: "desk",
+    name: "책상",
+    kind: "최적화",
+    method: "격자 탐색 + 이분법",
+    criterion: "최대응력 ≤ 5 MPa, 부피 최소",
+    ready: true,
+  },
+  {
+    id: "tsb",
+    name: "TSB 봉",
+    kind: "최적화",
+    method: "이분법",
+    criterion: "끝단 변위 ≤ 2.5 mm",
+    ready: false,
+  },
+  {
+    id: "fatigue",
+    name: "구멍 뚫린 판 피로",
+    kind: "최적화",
+    method: "이웃 탐색",
+    criterion: "수명 ≥ 100만 회, 질량 ≤ 5 kg",
+    ready: false,
+  },
+];
