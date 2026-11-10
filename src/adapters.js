@@ -10,13 +10,12 @@ export const LABELS = {
   pad_thk: "패드 두께",
   leg_size_mm: "다리 굵기",
   tabletop_thk_mm: "상판 두께",
+  pipe_wall_thk_mm: "파이프 두께",
 };
 
-// 케이스별 파일 위치
 // 파이썬 서버 주소
-const API_BASE = "http://localhost:8000";
+export const API_BASE = "http://localhost:8000";
 
-// 케이스별 데이터 주소 (json은 서버에서, 그림은 아직 public 폴더에서)
 // 케이스별 데이터 주소 (json과 그림 모두 서버에서)
 export const CASE_FILES = {
   pressure_vessel: {
@@ -25,7 +24,15 @@ export const CASE_FILES = {
   },
   desk: {
     json: `${API_BASE}/api/cases/desk/result`,
-    image: `${API_BASE}/api/cases/desk/image`, // 그림이 없으면 칸이 비어 있을 뿐 에러는 안 나요
+    image: `${API_BASE}/api/cases/desk/image`,
+  },
+  flange: {
+    json: `${API_BASE}/api/cases/flange/result`,
+    image: `${API_BASE}/api/cases/flange/image`,
+  },
+  beam: {
+    json: `${API_BASE}/api/cases/beam/result`,
+    image: `${API_BASE}/api/cases/beam/image`,
   },
 };
 
@@ -98,9 +105,59 @@ function adaptDesk(raw) {
   };
 }
 
+function adaptFlange(raw) {
+  const history = raw.history || [];
+  const best = raw.best; // 합격한 설계가 하나도 없으면 null
+  const keys = ["pipe_wall_thk_mm"];
+
+  const ref = best || history[0];
+  const limit = ref.stress_limit_MPa;
+  // 얇은 원통 공식으로 구한 이론 최소 두께: 압력 x 반지름 / 허용응력
+  const theoryMin = (ref.pressure_MPa * (ref.pipe_inner_d_mm / 2)) / limit;
+
+  // 합격안이 없으면 응력이 가장 낮았던 설계를 "최종"으로 보여줘요
+  const shown = best
+    ? best
+    : history.reduce((a, b) => (b.Smax_MPa < a.Smax_MPa ? b : a), history[0]);
+
+  return {
+    title: "플랜지 파이프",
+    limit,
+    feasible: Boolean(best),
+    initial: pick(history[0], keys), // 처음 평가한 설계
+    best: pick(shown, keys),
+    history: history.map((h) => ({
+      eval: h.eval,
+      value: h.Smax_MPa,
+      feasible: h.feasible,
+      design: pick(h, keys),
+    })),
+    cards: [
+      stressCard(shown.Smax_MPa, limit),
+      best
+        ? {
+            title: "최소 합격 두께",
+            value: `${best.pipe_wall_thk_mm.toFixed(2)} mm`,
+            sub: `이론 최소 약 ${theoryMin.toFixed(1)} mm`,
+          }
+        : {
+            title: "합격 두께",
+            value: "없음",
+            sub: `이론 최소 약 ${theoryMin.toFixed(1)} mm (탐색 범위 밖일 수 있어요)`,
+          },
+      {
+        title: "해석 횟수",
+        value: `${raw.n_evaluations ?? history.length}회`,
+        sub: "이분법 탐색",
+      },
+    ],
+  };
+}
+
 const ADAPTERS = {
   pressure_vessel: adaptPressureVessel,
   desk: adaptDesk,
+  flange: adaptFlange,
 };
 
 export function adaptCase(caseId, raw) {

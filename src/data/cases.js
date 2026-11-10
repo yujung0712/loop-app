@@ -1,12 +1,12 @@
 // 케이스 6종 정의. 나중에 서버가 이 목록을 내려주게 바꿀 예정
 export const CASES = [
-  {
-    id: "cantilever",
+    {
+    id: "beam",
     name: "외팔보",
     kind: "검증",
     method: "단일 해석",
     criterion: "이론값 대비 오차",
-    ready: false,
+    ready: true,
   },
   {
     id: "pressure_vessel",
@@ -22,7 +22,7 @@ export const CASES = [
     kind: "최적화",
     method: "이분법",
     criterion: "최대응력 ≤ 30 MPa",
-    ready: false,
+    ready: true,
   },
   {
     id: "desk",

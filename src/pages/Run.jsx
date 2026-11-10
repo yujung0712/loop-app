@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { CASE_FILES, adaptCase } from "../adapters";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { API_BASE, CASE_FILES, adaptCase } from "../adapters";
 
+// 실제로 해석을 돌릴 수 있는 케이스
+const RUNNABLE = ["flange", "beam"];
+
+// 플랜지 / 시뮬레이션용 단계
 const STEPS = [
   "입력",
   "형상 생성",
@@ -11,20 +15,463 @@ const STEPS = [
   "허용응력 평가",
   "결과 출력",
 ];
-const SUB = 5; // 설계 하나를 평가할 때 거치는 단계 수 (②~⑥)
+// 외팔보용 단계
+const BEAM_STEPS = [
+  "입력",
+  "형상 생성",
+  "메시 생성",
+  "ANSYS 연결",
+  "해석",
+  "결과 정리",
+  "결과 출력",
+];
+const SUB = 5; // (시뮬레이션) 설계 하나를 평가할 때 거치는 단계 수 (②~⑥)
+
+// 케이스별 화면 설정
+const RUN_INFO = {
+  flange: {
+    title: "플랜지 파이프",
+    hint: "서버가 노트북의 ANSYS로 실제 해석을 돌려요. 1~2분 걸려요.",
+    steps: STEPS,
+    labels: {
+      pipe_thk_min: "두께 최소(mm)",
+      pipe_thk_max: "두께 최대(mm)",
+      stress_limit_MPa: "허용응력(MPa)",
+      tol_mm: "허용오차(mm)",
+      length: "길이(mm)",
+      inner_d: "내경(mm)",
+      flange_outer_d: "플랜지 외경(mm)",
+      flange_thk: "플랜지 두께(mm)",
+      bolt_holes: "볼트 구멍(개)",
+      pressure_MPa: "내압(MPa)",
+    },
+  },
+  beam: {
+    title: "외팔보",
+    hint: "서버가 노트북의 ANSYS로 실제 해석을 돌려요. 외팔보는 해석을 1번만 하고, 1~2분 걸려요.",
+    steps: BEAM_STEPS,
+    labels: {
+      length: "보 길이(mm)",
+      width: "폭(mm)",
+      height: "높이(mm)",
+      E_MPa: "탄성계수(MPa)",
+      nu: "포아송비",
+      load_N: "하중(N)",
+      lc_mm: "메시 크기(mm)",
+    },
+  },
+};
+
+const btn = {
+  padding: "8px 16px",
+  borderRadius: 6,
+  border: "1px solid #bbb",
+  background: "white",
+  cursor: "pointer",
+  fontSize: 14,
+};
 
 function pad(n) {
   return String(n).padStart(3, "0");
 }
 
-function Run() {
+function CaseLinks() {
+  return (
+    <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+      <Link to="/run/pressure_vessel">압력용기</Link>
+      <Link to="/run/desk">책상</Link>
+      <Link to="/run/flange">플랜지</Link>
+      <Link to="/run/beam">외팔보</Link>
+    </div>
+  );
+}
+
+// 단계 표시줄 (active보다 앞은 완료, active는 진행 중)
+function StepBar({ steps = STEPS, active, failed }) {
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "16px 0" }}>
+      {steps.map((name, i) => {
+        const isDone = i < active;
+        const isActive = i === active;
+        const color = isActive ? (failed ? "#c62828" : "#1565c0") : isDone ? "#2e7d32" : "#999";
+        return (
+          <div
+            key={name}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 16,
+              fontSize: 13,
+              border: "1px solid " + (isActive ? color : "#ddd"),
+              background: isDone ? "#e8f5e9" : isActive ? (failed ? "#fdecea" : "#e3f2fd") : "white",
+              color,
+              fontWeight: isActive ? "bold" : "normal",
+            }}
+          >
+            {isDone ? "✓" : i + 1} {name}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProgressBar({ percent }) {
+  return (
+    <div style={{ height: 10, background: "#eee", borderRadius: 5 }}>
+      <div
+        style={{
+          height: 10,
+          width: percent + "%",
+          background: "#1565c0",
+          borderRadius: 5,
+          transition: "width 0.3s",
+        }}
+      />
+    </div>
+  );
+}
+
+// ---- 플랜지: 로그 한 줄을 보고 지금 어느 단계인지 추정해요 (모르면 null) ----
+function flangeStepOf(line) {
+  if (line.includes("[RESULT]") || line.includes("[BISECTION]")) return 5;
+  if (line.includes("post done")) return 5;
+  if (line.includes("solve done") || line.includes("POST1") || line.includes("save PNG")) return 5;
+  if (line.includes("SOLU start") || line.includes("fixed base nodes") || line.includes("pressure="))
+    return 4;
+  if (line.includes("extract done")) return 3;
+  if (line.includes("[2/3]") || line.includes("[MAPDL]")) return 3;
+  if (line.includes("mesh.generate") || line.includes("[GMSH] detect")) return 3;
+  if (line.includes("[GMSH] initialize")) return 2;
+  if (line.includes("[1/3]") || line.includes("[EVAL")) return 1;
+  return null;
+}
+
+// ---- 외팔보: 로그를 보고 지금 단계를 추정해요 ----
+function beamActive(lines, done) {
+  if (done) return BEAM_STEPS.length;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (l.includes("[DONE]")) return 5;
+    if (l.includes("[MAPDL] launched")) return 4;
+    if (l.includes("[MAPDL] launch") || l.includes("FIXED nodes") || l.includes("[GMSH] nodes="))
+      return 3;
+    if (l.includes("Step File Name")) return 2;
+    if (l.includes("[GMSH] build")) return 1;
+  }
+  return 1;
+}
+
+// 외팔보 결과 요약에 보여줄 줄
+const BEAM_SUMMARY_KEYS = [
+  "MAPDL LOAD UZ avg",
+  "EB tip UZ",
+  "UZ error vs EB",
+  "MAPDL max SEQV",
+  "EB max bend stress",
+];
+
+// "[RESULT] Smax=... | limit=... | feasible=True | thk=..." 줄을 읽기 좋게
+function parseResult(line) {
+  const m = line.match(
+    /Smax=([\d.eE+-]+) MPa \| limit=([\d.eE+-]+) MPa \| feasible=(True|False) \| thk=([\d.]+) mm/
+  );
+  if (!m) return null;
+  return {
+    smax: Number(m[1]),
+    limit: Number(m[2]),
+    ok: m[3] === "True",
+    thk: Number(m[4]),
+  };
+}
+
+/* ---------- 실제 해석 (서버가 ANSYS를 돌려요) ---------- */
+function RealRun({ caseId }) {
+  const cfg = RUN_INFO[caseId];
+  const isBeam = caseId === "beam";
+  const [searchParams, setSearchParams] = useSearchParams();
+  const runId = searchParams.get("run");
+  const [info, setInfo] = useState(null);
+  const [message, setMessage] = useState("");
+  const [starting, setStarting] = useState(false);
+
+  // 2초마다 서버에 진행 상황을 물어봐요
+  useEffect(() => {
+    if (!runId) {
+      setInfo(null);
+      return;
+    }
+    let stop = false;
+    const load = () =>
+      fetch(`${API_BASE}/api/runs/${runId}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("not found");
+          return res.json();
+        })
+        .then((json) => {
+          if (!stop) {
+            setInfo(json);
+            setMessage("");
+          }
+          return json;
+        })
+        .catch(() => {
+          if (!stop)
+            setMessage(
+              "진행 상황을 불러오지 못했어요. 서버가 켜져 있는지 확인하세요. (서버를 다시 켰다면 해석을 다시 시작해야 해요.)"
+            );
+          return null;
+        });
+    load();
+    const id = setInterval(() => {
+      load().then((json) => {
+        if (json && json.status !== "running") clearInterval(id);
+      });
+    }, 2000);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+  }, [runId]);
+
+  const params = info && info.params ? info.params : {};
+  const hasParams = Object.keys(params).length > 0;
+
+  // 같은 입력값으로 (없으면 서버 기본값으로) 시작
+  const start = async () => {
+    setStarting(true);
+    setMessage("");
+    try {
+      const res = await fetch(`${API_BASE}/api/cases/${caseId}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params }),
+      });
+      const json = await res.json();
+      if (!res.ok)
+        setMessage(typeof json.detail === "string" ? json.detail : "해석을 시작하지 못했어요.");
+      else setSearchParams({ run: json.run_id });
+    } catch (e) {
+      setMessage("서버에 연결하지 못했어요. 서버가 켜져 있는지 확인하세요.");
+    }
+    setStarting(false);
+  };
+
+  const status = info ? info.status : null;
+  const running = status === "running";
+  const done = status === "done";
+  const failed = status === "failed";
+  const logLines = info ? info.log : [];
+
+  // 지금 단계 추정
+  let active = 0;
+  if (info) {
+    if (isBeam) {
+      active = beamActive(logLines, done);
+    } else {
+      active = 1;
+      for (let i = logLines.length - 1; i >= 0; i--) {
+        const s = flangeStepOf(logLines[i]);
+        if (s !== null) {
+          active = s;
+          break;
+        }
+      }
+      if (done) active = cfg.steps.length;
+    }
+  }
+
+  // 플랜지: 예상 해석 횟수 (이분법: 양 끝 2번 + log2(범위 / 허용오차))
+  const lo = params.pipe_thk_min ?? 5;
+  const hi = params.pipe_thk_max ?? 15;
+  const tol = params.tol_mm ?? 0.5;
+  const est = Math.max(2, 2 + Math.ceil(Math.log2((hi - lo) / tol)));
+  const completed = info ? info.results.length : 0;
+
+  // 진행률
+  let percent = 0;
+  if (isBeam) {
+    const table = [0, 10, 30, 50, 70, 90, 95];
+    percent = done ? 100 : info ? table[Math.min(active, 6)] : 0;
+  } else {
+    percent = done ? 100 : Math.min(99, Math.round((completed / est) * 100));
+  }
+
+  // 플랜지: 지금 평가 중인 두께
+  let currentThk = null;
+  for (let i = logLines.length - 1; i >= 0; i--) {
+    const m = logLines[i].match(/wall_thk = ([\d.]+) mm/);
+    if (m) {
+      currentThk = Number(m[1]);
+      break;
+    }
+  }
+
+  // 외팔보: 결과 요약 줄
+  const beamSummary = logLines
+    .filter((l) => BEAM_SUMMARY_KEYS.some((k) => l.includes(k)))
+    .map((l) => l.replace(/\s+/g, " ").trim());
+
+  return (
+    <div>
+      <h2>③ 실행 · 진행 · {cfg.title}</h2>
+      <CaseLinks />
+      <p style={{ color: "#1565c0", fontSize: 13 }}>{cfg.hint}</p>
+
+      {/* 이번 실행의 입력값 */}
+      {info && (
+        <div
+          style={{
+            background: "#f5f5f5",
+            borderRadius: 6,
+            padding: 10,
+            fontSize: 13,
+            color: "#444",
+            marginBottom: 8,
+          }}
+        >
+          <b>이번 실행 입력값</b>
+          {hasParams ? (
+            <div>
+              {Object.entries(params)
+                .map(([k, v]) => `${cfg.labels[k] || k} ${v}`)
+                .join("  ·  ")}
+            </div>
+          ) : (
+            <div>입력 화면을 거치지 않아 서버의 기본값으로 실행했어요.</div>
+          )}
+        </div>
+      )}
+
+      <StepBar steps={cfg.steps} active={active} failed={failed} />
+
+      <div style={{ marginBottom: 4, fontSize: 14 }}>
+        {isBeam ? (
+          <>
+            해석 1회 ({percent}%)
+            {info && `  ·  경과 ${info.elapsed_s}초`}
+          </>
+        ) : (
+          <>
+            해석 {completed} / 약 {est}회 완료 ({percent}%)
+            {running && currentThk !== null && `  ·  지금 두께 ${currentThk} mm 평가 중`}
+          </>
+        )}
+      </div>
+      <ProgressBar percent={percent} />
+
+      {/* 버튼 */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "16px 0" }}>
+        <button style={btn} onClick={start} disabled={starting || running}>
+          {runId
+            ? hasParams
+              ? "↺ 같은 입력값으로 다시 실행"
+              : "↺ 다시 실행"
+            : "▶ 기본 입력값으로 해석 시작"}
+        </button>
+        {done && (
+          <Link
+            to={`/result/${caseId}?run=${runId}`}
+            style={{
+              ...btn,
+              textDecoration: "none",
+              color: "#2e7d32",
+              borderColor: "#2e7d32",
+            }}
+          >
+            결과 보기 →
+          </Link>
+        )}
+        <Link to={`/input/${caseId}`} style={{ fontSize: 14 }}>
+          입력값 바꾸기
+        </Link>
+      </div>
+
+      {message && <p style={{ color: "#c62828", fontSize: 14 }}>! {message}</p>}
+
+      {failed && (
+        <p style={{ color: "#c62828", fontSize: 14 }}>
+          해석이 실패했어요. 아래 로그의 마지막 줄을 확인하세요. ANSYS가 남아 있다면
+          작업 관리자에서 끄고 다시 실행해 보세요.
+        </p>
+      )}
+
+      {/* 플랜지: 끝난 해석 결과 */}
+      {!isBeam && info && info.results.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          {info.results.map((line, i) => {
+            const r = parseResult(line);
+            if (!r)
+              return (
+                <div key={i} style={{ fontSize: 14, fontFamily: "monospace" }}>
+                  {`#${i} ${line.replace("[RESULT] ", "")}`}
+                </div>
+              );
+            return (
+              <div
+                key={i}
+                style={{
+                  fontSize: 14,
+                  fontFamily: "monospace",
+                  color: r.ok ? "#2e7d32" : "#c62828",
+                }}
+              >
+                {`#${i}  두께 ${r.thk.toFixed(3)} mm → ${r.smax.toFixed(1)} MPa (허용 ${r.limit})  `}
+                {r.ok ? "✓ 합격" : "✕ 불합격"}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 외팔보: 결과 요약 */}
+      {isBeam && beamSummary.length > 0 && (
+        <div
+          style={{
+            marginBottom: 12,
+            fontSize: 14,
+            fontFamily: "monospace",
+            color: "#2e7d32",
+          }}
+        >
+          {beamSummary.map((l, i) => (
+            <div key={i}>{l}</div>
+          ))}
+        </div>
+      )}
+
+      {/* 로그 창 */}
+      <div
+        style={{
+          background: "#1e1e1e",
+          color: "#d4d4d4",
+          fontFamily: "monospace",
+          fontSize: 13,
+          padding: 12,
+          borderRadius: 8,
+          minHeight: 160,
+          maxHeight: 280,
+          overflow: "auto",
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {logLines.length === 0 && <div>시작 버튼을 누르면 로그가 나와요.</div>}
+        {logLines.map((l, i) => (
+          <div key={i}>{l}</div>
+        ))}
+        {done && <div style={{ color: "#81c784" }}>[DONE] 모든 해석이 끝났어요.</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 시뮬레이션 (받아 둔 기록 재생) ---------- */
+function SimRun() {
   const { caseId } = useParams();
   const [view, setView] = useState(null);
   const [error, setError] = useState(false);
   const [tick, setTick] = useState(0);
   const [running, setRunning] = useState(false);
 
-  // 케이스가 바뀌면 파일을 다시 읽고 처음 상태로
   useEffect(() => {
     setView(null);
     setError(false);
@@ -45,14 +492,12 @@ function Run() {
   const t = Math.min(tick, total * SUB);
   const finished = view !== null && t >= total * SUB;
 
-  // 0.2초마다 한 단계씩 진행
   useEffect(() => {
     if (!running || !view) return;
     const id = setInterval(() => setTick((x) => x + 1), 200);
     return () => clearInterval(id);
   }, [running, view]);
 
-  // 끝나면 멈춤
   useEffect(() => {
     if (finished) setRunning(false);
   }, [finished]);
@@ -64,7 +509,6 @@ function Run() {
   const evalIdx = Math.floor(t / SUB);
   const sub = t % SUB;
 
-  // 지금 어느 단계인지
   let active;
   if (finished) active = STEPS.length;
   else if (t === 0 && !running) active = 0;
@@ -74,70 +518,23 @@ function Run() {
   const current = !finished && (running || t > 0) ? view.history[evalIdx] : null;
   const percent = total === 0 ? 0 : Math.round((evalIdx / total) * 100);
 
-  const btn = {
-    padding: "8px 16px",
-    borderRadius: 6,
-    border: "1px solid #bbb",
-    background: "white",
-    cursor: "pointer",
-    fontSize: 14,
-  };
-
   return (
     <div>
       <h2>③ 실행 · 진행 · {view.title}</h2>
-
-      {/* 케이스 바꿔 보기 */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-        <Link to="/run/pressure_vessel">압력용기</Link>
-        <Link to="/run/desk">책상</Link>
-      </div>
+      <CaseLinks />
 
       <p style={{ color: "#888", fontSize: 13 }}>
-        ※ 서버 연결 전이라, 이미 받은 해석 기록을 재생하는 시뮬레이션이에요.
+        ※ 이 케이스는 아직 서버 실행이 연결되지 않아서, 받아 둔 해석 기록을
+        재생하는 시뮬레이션이에요.
       </p>
 
-      {/* 7단계 표시줄 */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "16px 0" }}>
-        {STEPS.map((name, i) => {
-          const isDone = i < active;
-          const isActive = i === active;
-          return (
-            <div
-              key={name}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 16,
-                fontSize: 13,
-                border: "1px solid " + (isActive ? "#1565c0" : "#ddd"),
-                background: isDone ? "#e8f5e9" : isActive ? "#e3f2fd" : "white",
-                color: isDone ? "#2e7d32" : isActive ? "#1565c0" : "#999",
-                fontWeight: isActive ? "bold" : "normal",
-              }}
-            >
-              {isDone ? "✓" : i + 1} {name}
-            </div>
-          );
-        })}
-      </div>
+      <StepBar steps={STEPS} active={active} failed={false} />
 
-      {/* 진행률 */}
       <div style={{ marginBottom: 4, fontSize: 14 }}>
         해석 {evalIdx} / {total}회 ({percent}%)
       </div>
-      <div style={{ height: 10, background: "#eee", borderRadius: 5 }}>
-        <div
-          style={{
-            height: 10,
-            width: percent + "%",
-            background: "#1565c0",
-            borderRadius: 5,
-            transition: "width 0.2s",
-          }}
-        />
-      </div>
+      <ProgressBar percent={percent} />
 
-      {/* 버튼 */}
       <div style={{ display: "flex", gap: 8, margin: "16px 0" }}>
         {!running && !finished && (
           <button style={btn} onClick={() => setRunning(true)}>
@@ -163,14 +560,18 @@ function Run() {
         {finished && (
           <Link
             to={"/result/" + caseId}
-            style={{ ...btn, textDecoration: "none", color: "#2e7d32", borderColor: "#2e7d32" }}
+            style={{
+              ...btn,
+              textDecoration: "none",
+              color: "#2e7d32",
+              borderColor: "#2e7d32",
+            }}
           >
             결과 보기 →
           </Link>
         )}
       </div>
 
-      {/* 로그 창 */}
       <div
         style={{
           background: "#1e1e1e",
@@ -207,6 +608,13 @@ function Run() {
       </div>
     </div>
   );
+}
+
+function Run() {
+  const { caseId } = useParams();
+  // key를 주면 케이스를 바꿀 때 화면 상태가 새로 만들어져요
+  if (RUNNABLE.includes(caseId)) return <RealRun key={caseId} caseId={caseId} />;
+  return <SimRun key={caseId} />;
 }
 
 export default Run;

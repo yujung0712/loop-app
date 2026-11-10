@@ -1,5 +1,6 @@
 // 케이스별 입력 칸 정의
 // kind: "range" = 최소~최대, "value" = 값 하나
+// allowNegative: true 이면 마이너스 값도 입력할 수 있어요 (하중처럼 방향이 있는 값)
 export const SCHEMAS = {
   pressure_vessel: {
     title: "압력용기",
@@ -103,6 +104,43 @@ export const SCHEMAS = {
       const t = (v.pressure_MPa * (v.inner_d / 2)) / v.stress_limit_MPa;
       if (!isFinite(t)) return null;
       return `얇은 원통 공식(pR/σ)으로 계산한 최소 두께는 약 ${t.toFixed(1)} mm예요. 해석 결과와 비교할 기준값이에요.`;
+    },
+  },
+
+  beam: {
+    title: "외팔보",
+    sections: [
+      {
+        name: "형상 (왼쪽 끝이 고정단)",
+        fields: [
+          { key: "length", label: "보 길이", unit: "mm", kind: "value", value: 1000 },
+          { key: "width", label: "단면 폭", unit: "mm", kind: "value", value: 50 },
+          { key: "height", label: "단면 높이", unit: "mm", kind: "value", value: 50 },
+        ],
+      },
+      {
+        name: "재료",
+        fields: [
+          { key: "E_MPa", label: "탄성계수 (강철)", unit: "MPa", kind: "value", value: 200000 },
+          { key: "nu", label: "포아송비", unit: "", kind: "value", value: 0.3 },
+        ],
+      },
+      {
+        name: "하중 · 메시",
+        note: "하중은 보 끝을 누르는 힘이에요. 아래로 누르면 마이너스(-) 값을 넣어요. 메시 크기는 7 mm 이상이에요 (학생용 ANSYS의 노드 수 제한 때문이에요).",
+        fields: [
+          { key: "load_N", label: "끝단 하중", unit: "N", kind: "value", value: -1000, allowNegative: true },
+          { key: "lc_mm", label: "메시 크기", unit: "mm", kind: "value", value: 10 },
+        ],
+      },
+    ],
+    theory: (v) => {
+      // 오일러-베르누이 보 이론: 처짐 = F L^3 / (3 E I), 최대 굽힘응력 = F L (h/2) / I
+      const I = (v.width * Math.pow(v.height, 3)) / 12;
+      const tip = (v.load_N * Math.pow(v.length, 3)) / (3 * v.E_MPa * I);
+      const stress = (Math.abs(v.load_N) * v.length * (v.height / 2)) / I;
+      if (!isFinite(tip) || !isFinite(stress)) return null;
+      return `보 이론으로 계산하면 끝단 처짐은 약 ${tip.toFixed(3)} mm, 최대 굽힘응력은 약 ${stress.toFixed(1)} MPa예요. 해석 결과와 비교할 기준값이에요.`;
     },
   },
 };

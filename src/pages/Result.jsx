@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   BarChart,
   Bar,
@@ -13,7 +13,8 @@ import {
 } from "recharts";
 import DesignCompare from "../components/DesignCompare";
 import Checks from "../components/Checks";
-import { CASE_FILES, adaptCase } from "../adapters";
+import BeamResult from "../components/BeamResult";
+import { API_BASE, CASE_FILES, adaptCase } from "../adapters";
 
 function Card({ title, value, sub }) {
   return (
@@ -34,27 +35,45 @@ function Card({ title, value, sub }) {
 
 function Result() {
   const { caseId } = useParams();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get("run"); // 있으면 방금 돌린 해석 결과
   const [raw, setRaw] = useState(null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     setRaw(null);
     setError(false);
-    const files = CASE_FILES[caseId];
-    if (!files) return;
-    fetch(files.json)
+    const url = runId
+      ? `${API_BASE}/api/runs/${runId}/result`
+      : CASE_FILES[caseId]?.json;
+    if (!url) return;
+    fetch(url)
       .then((res) => {
         if (!res.ok) throw new Error("load failed");
         return res.json();
       })
       .then((json) => setRaw(json))
       .catch(() => setError(true));
-  }, [caseId]);
+  }, [caseId, runId]);
 
-  const files = CASE_FILES[caseId];
-  if (!files) return <p>아직 준비되지 않은 케이스예요.</p>;
-  if (error) return <p>결과 파일을 불러오지 못했어요.</p>;
+  if (!CASE_FILES[caseId]) return <p>아직 준비되지 않은 케이스예요.</p>;
+  if (error)
+    return (
+      <p>
+        결과를 불러오지 못했어요. 서버가 켜져 있는지 확인하세요.
+        {runId && " (서버를 다시 켰다면 해석을 다시 실행해야 해요.)"}
+      </p>
+    );
   if (!raw) return <p>불러오는 중...</p>;
+
+  const imageUrl = runId
+    ? `${API_BASE}/api/runs/${runId}/image`
+    : CASE_FILES[caseId].image;
+
+  // 외팔보는 반복 기록이 없는 검증 케이스라서 화면이 따로 있어요
+  if (caseId === "beam") {
+    return <BeamResult raw={raw} imageUrl={imageUrl} runId={runId} />;
+  }
 
   const view = adaptCase(caseId, raw);
   const chartData = view.history.map((h) => ({
@@ -66,6 +85,11 @@ function Result() {
   return (
     <div>
       <h2>④ 결과 · {view.title}</h2>
+      {runId && (
+        <p style={{ color: "#1565c0", fontSize: 14 }}>
+          방금 실행한 해석 결과예요 ({runId})
+        </p>
+      )}
 
       {/* 상태 배너 */}
       <div
@@ -92,7 +116,7 @@ function Result() {
       {/* 응력 그림 */}
       <h3 style={{ marginTop: 32 }}>응력 분포 (최종 설계)</h3>
       <img
-        src={files.image}
+        src={imageUrl}
         alt="최종 설계의 응력 분포"
         style={{
           maxWidth: "100%",

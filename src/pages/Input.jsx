@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { SCHEMAS } from "../data/schemas";
-import { CASE_FILES } from "../adapters";
+import { API_BASE, CASE_FILES } from "../adapters";
+
+// 입력값을 서버로 보내서 실제로 해석하는 케이스
+const RUNNABLE = ["flange", "beam"];
 
 // 처음 입력값 만들기: 숫자 칸마다 문자열로 저장
 function makeInitial(schema) {
@@ -30,10 +33,12 @@ const inputStyle = {
 function InputForm({ caseId, schema }) {
   const navigate = useNavigate();
   const [vals, setVals] = useState(() => makeInitial(schema));
+  const [serverMessage, setServerMessage] = useState("");
+  const [starting, setStarting] = useState(false);
 
   const set = (key, value) => setVals((p) => ({ ...p, [key]: value }));
 
-  // 검사: 빈 칸, 최소 ≥ 최대
+  // 검사: 빈 칸, 최소 ≥ 최대, 0 이하
   const problems = [];
   schema.sections.forEach((s) =>
     s.fields.forEach((f) => {
@@ -43,19 +48,52 @@ function InputForm({ caseId, schema }) {
         if (vals[f.key + "_min"] === "" || vals[f.key + "_max"] === "")
           problems.push(`${f.label}: 빈 칸이 있어요`);
         else if (lo >= hi) problems.push(`${f.label}: 최소가 최대보다 작아야 해요`);
-      } else if (vals[f.key] === "" || Number(vals[f.key]) <= 0) {
+      } else if (vals[f.key] === "") {
+        problems.push(`${f.label}: 빈 칸이 있어요`);
+      } else if (f.allowNegative) {
+        if (Number(vals[f.key]) === 0) problems.push(`${f.label}: 0이 아닌 숫자를 넣어 주세요`);
+      } else if (Number(vals[f.key]) <= 0) {
         problems.push(`${f.label}: 0보다 큰 숫자를 넣어 주세요`);
       }
     })
   );
 
-  // 이론 검산용 숫자 값
+  // 숫자로 바꾼 입력값 (이론 검산과 서버 전송에 써요)
   const numeric = {};
   Object.keys(vals).forEach((k) => (numeric[k] = Number(vals[k])));
   const theoryText = schema.theory ? schema.theory(numeric) : null;
 
+  const realRun = RUNNABLE.includes(caseId);
   const hasData = Boolean(CASE_FILES[caseId]);
-  const canRun = problems.length === 0 && hasData;
+  const canRun = problems.length === 0 && hasData && !starting;
+
+  const startRun = async () => {
+    // 서버 실행이 연결되지 않은 케이스는 실행 화면(시뮬레이션)으로만 이동
+    if (!realRun) {
+      navigate("/run/" + caseId);
+      return;
+    }
+    setStarting(true);
+    setServerMessage("");
+    try {
+      const res = await fetch(`${API_BASE}/api/cases/${caseId}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ params: numeric }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setServerMessage(
+          typeof json.detail === "string" ? json.detail : "입력값을 확인해 주세요."
+        );
+      } else {
+        navigate(`/run/${caseId}?run=${json.run_id}`);
+      }
+    } catch (e) {
+      setServerMessage("서버에 연결하지 못했어요. 서버가 켜져 있는지 확인하세요.");
+    }
+    setStarting(false);
+  };
 
   return (
     <div>
@@ -66,11 +104,18 @@ function InputForm({ caseId, schema }) {
         <Link to="/input/pressure_vessel">압력용기</Link>
         <Link to="/input/desk">책상</Link>
         <Link to="/input/flange">플랜지</Link>
+        <Link to="/input/beam">외팔보</Link>
       </div>
 
-      <p style={{ color: "#888", fontSize: 13 }}>
-        ※ 서버 연결 전이라 입력값이 해석에 반영되지는 않아요.
-      </p>
+      {realRun ? (
+        <p style={{ color: "#1565c0", fontSize: 13 }}>
+          입력한 값으로 서버가 ANSYS 해석을 실제로 실행해요.
+        </p>
+      ) : (
+        <p style={{ color: "#888", fontSize: 13 }}>
+          ※ 이 케이스는 서버 실행이 연결되지 않아서 입력값이 해석에 반영되지는 않아요.
+        </p>
+      )}
 
       {schema.sections.map((s) => (
         <div
@@ -104,6 +149,7 @@ function InputForm({ caseId, schema }) {
               ) : (
                 <input
                   type="number"
+                  step="any"
                   style={inputStyle}
                   value={vals[f.key]}
                   onChange={(e) => set(f.key, e.target.value)}
@@ -139,9 +185,15 @@ function InputForm({ caseId, schema }) {
         </div>
       )}
 
+      {serverMessage && (
+        <div style={{ color: "#c62828", fontSize: 14, marginBottom: 12 }}>
+          ! {serverMessage}
+        </div>
+      )}
+
       <button
         disabled={!canRun}
-        onClick={() => navigate("/run/" + caseId)}
+        onClick={startRun}
         style={{
           padding: "10px 20px",
           borderRadius: 6,
@@ -152,7 +204,7 @@ function InputForm({ caseId, schema }) {
           cursor: canRun ? "pointer" : "not-allowed",
         }}
       >
-        해석 시작 →
+        {starting ? "시작하는 중..." : realRun ? "입력값으로 해석 시작 →" : "해석 시작 →"}
       </button>
       {!hasData && (
         <p style={{ color: "#888", fontSize: 13 }}>
