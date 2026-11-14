@@ -4,7 +4,7 @@ import { SCHEMAS } from "../data/schemas";
 import { API_BASE, CASE_FILES } from "../adapters";
 
 // 입력값을 서버로 보내서 실제로 해석하는 케이스
-const RUNNABLE = ["flange", "beam"];
+const RUNNABLE = ["flange", "beam", "desk", "pressure_vessel"];
 
 // 처음 입력값 만들기: 숫자 칸마다 문자열로 저장
 function makeInitial(schema) {

@@ -3,9 +3,9 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { API_BASE, CASE_FILES, adaptCase } from "../adapters";
 
 // 실제로 해석을 돌릴 수 있는 케이스
-const RUNNABLE = ["flange", "beam"];
+const RUNNABLE = ["flange", "beam", "desk", "pressure_vessel"];
 
-// 플랜지 / 시뮬레이션용 단계
+// 플랜지 / 책상 / 압력용기 / 시뮬레이션용 단계
 const STEPS = [
   "입력",
   "형상 생성",
@@ -43,6 +43,46 @@ const RUN_INFO = {
       flange_outer_d: "플랜지 외경(mm)",
       flange_thk: "플랜지 두께(mm)",
       bolt_holes: "볼트 구멍(개)",
+      pressure_MPa: "내압(MPa)",
+    },
+  },
+  desk: {
+    title: "책상",
+    hint: "서버가 노트북의 ANSYS로 해석을 여러 번 돌려요. 설정에 따라 3분 이상 걸릴 수 있어요.",
+    steps: STEPS,
+    labels: {
+      leg_size_mm_min: "다리 굵기 최소(mm)",
+      leg_size_mm_max: "다리 굵기 최대(mm)",
+      tabletop_thk_mm_min: "상판 두께 최소(mm)",
+      tabletop_thk_mm_max: "상판 두께 최대(mm)",
+      stress_limit_MPa: "허용응력(MPa)",
+      max_eval: "최대 해석 횟수",
+      tabletop_length: "상판 길이(mm)",
+      tabletop_width: "상판 폭(mm)",
+      desk_height: "책상 높이(mm)",
+      load_N: "하중(N)",
+      E_MPa: "탄성계수(MPa)",
+    },
+  },
+  pressure_vessel: {
+    title: "압력용기",
+    hint: "서버가 노트북의 ANSYS로 해석을 여러 번 돌려요. 보통 10분 안팎 걸려요. ※ 이 케이스는 해석 모델에 알려진 문제가 있어서 결과를 그대로 믿으면 안 돼요 (결과 화면의 자동 점검 참고).",
+    steps: STEPS,
+    labels: {
+      main_thk_min: "주관 두께 최소(mm)",
+      main_thk_max: "주관 두께 최대(mm)",
+      nozzle_thk_min: "노즐 두께 최소(mm)",
+      nozzle_thk_max: "노즐 두께 최대(mm)",
+      pad_thk_min: "패드 두께 최소(mm)",
+      pad_thk_max: "패드 두께 최대(mm)",
+      stress_limit_MPa: "허용응력(MPa)",
+      weight_limit_N: "자중 제한(N)",
+      max_eval: "최대 해석 횟수",
+      main_length: "주관 길이(mm)",
+      main_inner_d: "주관 안지름(mm)",
+      nozzle_length: "노즐 길이(mm)",
+      nozzle_inner_d: "노즐 안지름(mm)",
+      pad_outer_d: "패드 바깥지름(mm)",
       pressure_MPa: "내압(MPa)",
     },
   },
@@ -131,7 +171,7 @@ function ProgressBar({ percent }) {
   );
 }
 
-// ---- 플랜지: 로그 한 줄을 보고 지금 어느 단계인지 추정해요 (모르면 null) ----
+// ---- 플랜지 / 책상 / 압력용기: 로그 한 줄을 보고 지금 어느 단계인지 추정해요 (모르면 null) ----
 function flangeStepOf(line) {
   if (line.includes("[RESULT]") || line.includes("[BISECTION]")) return 5;
   if (line.includes("post done")) return 5;
@@ -170,17 +210,52 @@ const BEAM_SUMMARY_KEYS = [
   "EB max bend stress",
 ];
 
-// "[RESULT] Smax=... | limit=... | feasible=True | thk=..." 줄을 읽기 좋게
-function parseResult(line) {
+// "[RESULT] ..." 줄을 읽기 좋게 바꿔요 (플랜지 / 책상 / 압력용기)
+// evalLine: 같은 순서의 "[EVAL 003] ..." 줄 (설계 값이 들어 있어요)
+function describeResult(line, evalLine, pvLimit) {
+  // 압력용기: Smax=... | self-weight=... | feasible=...
+  const pv = line.match(
+    /Smax=([\d.eE+-]+) MPa \| self-weight=([\d.eE+-]+) N \| feasible=(True|False)/
+  );
+  if (pv) {
+    let design = "";
+    if (evalLine) {
+      const d = evalLine.match(
+        /main_wall_thk=([\d.]+) \| nozzle_wall_thk=([\d.]+) \| pad_thk=([\d.]+)/
+      );
+      if (d) design = `주관 ${Number(d[1])} · 노즐 ${Number(d[2])} · 패드 ${Number(d[3])} mm`;
+    }
+    const smax = Number(pv[1]);
+    return {
+      smax,
+      limit: pvLimit,
+      ok: pv[3] === "True",
+      design,
+      failedSolve: Math.abs(smax - 10000) < 0.001, // 풀리지 않은 설계에 서버 코드가 주는 벌점 값(정확히 10000)
+    };
+  }
+
+  // 플랜지 / 책상: Smax=... | limit=... | feasible=... | thk=... (또는 volume=...)
   const m = line.match(
-    /Smax=([\d.eE+-]+) MPa \| limit=([\d.eE+-]+) MPa \| feasible=(True|False) \| thk=([\d.]+) mm/
+    /Smax=([\d.eE+-]+) MPa \| limit=([\d.eE+-]+) MPa \| feasible=(True|False)(?: \| (.*))?/
   );
   if (!m) return null;
+  const extra = m[4] || "";
+  let design = "";
+  const thk = extra.match(/thk=([\d.]+) mm/);
+  if (thk) design = `두께 ${Number(thk[1]).toFixed(3)} mm`;
+  const vol = extra.match(/volume=([\d.eE+-]+)/);
+  if (evalLine) {
+    const d = evalLine.match(/leg_size = ([\d.]+) mm \| tabletop_thk = ([\d.]+) mm/);
+    if (d) design = `다리 ${Number(d[1])} · 상판 ${Number(d[2])} mm`;
+  }
+  if (vol) design += ` · 부피 ${(Number(vol[1]) / 1e6).toFixed(2)} L`;
   return {
     smax: Number(m[1]),
     limit: Number(m[2]),
     ok: m[3] === "True",
-    thk: Number(m[4]),
+    design,
+    failedSolve: false,
   };
 }
 
@@ -188,6 +263,8 @@ function parseResult(line) {
 function RealRun({ caseId }) {
   const cfg = RUN_INFO[caseId];
   const isBeam = caseId === "beam";
+  const isDesk = caseId === "desk";
+  const isPV = caseId === "pressure_vessel";
   const [searchParams, setSearchParams] = useSearchParams();
   const runId = searchParams.get("run");
   const [info, setInfo] = useState(null);
@@ -261,6 +338,7 @@ function RealRun({ caseId }) {
   const done = status === "done";
   const failed = status === "failed";
   const logLines = info ? info.log : [];
+  const evalLines = info && info.eval_lines ? info.eval_lines : [];
 
   // 지금 단계 추정
   let active = 0;
@@ -280,11 +358,23 @@ function RealRun({ caseId }) {
     }
   }
 
-  // 플랜지: 예상 해석 횟수 (이분법: 양 끝 2번 + log2(범위 / 허용오차))
-  const lo = params.pipe_thk_min ?? 5;
-  const hi = params.pipe_thk_max ?? 15;
-  const tol = params.tol_mm ?? 0.5;
-  const est = Math.max(2, 2 + Math.ceil(Math.log2((hi - lo) / tol)));
+  // 예상 해석 횟수 (추정)
+  let est;
+  if (isPV) {
+    // 이웃 설계를 한 칸씩 바꿔 보는 탐색이라 횟수가 달라져요. 보통 15~25번이에요
+    est = 18;
+  } else if (isDesk) {
+    // 거친 탐색: 다리 굵기 10 mm 간격마다 2번, 세밀 탐색: 약 8번
+    const legMin = params.leg_size_mm_min ?? 30;
+    const legMax = params.leg_size_mm_max ?? 70;
+    est = (Math.floor((legMax - legMin) / 10) + 1) * 2 + 8;
+  } else {
+    // 플랜지(이분법): 양 끝 2번 + log2(범위 / 허용오차)
+    const lo = params.pipe_thk_min ?? 5;
+    const hi = params.pipe_thk_max ?? 15;
+    const tol = params.tol_mm ?? 0.5;
+    est = Math.max(2, 2 + Math.ceil(Math.log2((hi - lo) / tol)));
+  }
   const completed = info ? info.results.length : 0;
 
   // 진행률
@@ -293,17 +383,22 @@ function RealRun({ caseId }) {
     const table = [0, 10, 30, 50, 70, 90, 95];
     percent = done ? 100 : info ? table[Math.min(active, 6)] : 0;
   } else {
-    percent = done ? 100 : Math.min(99, Math.round((completed / est) * 100));
+    percent = done ? 100 : Math.min(95, Math.round((completed / est) * 100));
   }
 
-  // 플랜지: 지금 평가 중인 두께
-  let currentThk = null;
-  for (let i = logLines.length - 1; i >= 0; i--) {
-    const m = logLines[i].match(/wall_thk = ([\d.]+) mm/);
-    if (m) {
-      currentThk = Number(m[1]);
-      break;
-    }
+  // 지금 평가 중인 설계 (가장 최근 [EVAL ...] 줄)
+  let current = null;
+  const lastEval = evalLines.length > 0 ? evalLines[evalLines.length - 1] : "";
+  if (lastEval) {
+    const f = lastEval.match(/wall_thk = ([\d.]+) mm/);
+    const d = lastEval.match(/leg_size = ([\d.]+) mm \| tabletop_thk = ([\d.]+) mm/);
+    const p = lastEval.match(
+      /main_wall_thk=([\d.]+) \| nozzle_wall_thk=([\d.]+) \| pad_thk=([\d.]+)/
+    );
+    if (f) current = `지금 두께 ${Number(f[1])} mm 평가 중`;
+    else if (d) current = `지금 다리 ${Number(d[1])} · 상판 ${Number(d[2])} mm 평가 중`;
+    else if (p)
+      current = `지금 주관 ${Number(p[1])} · 노즐 ${Number(p[2])} · 패드 ${Number(p[3])} mm 평가 중`;
   }
 
   // 외팔보: 결과 요약 줄
@@ -352,12 +447,18 @@ function RealRun({ caseId }) {
           </>
         ) : (
           <>
-            해석 {completed} / 약 {est}회 완료 ({percent}%)
-            {running && currentThk !== null && `  ·  지금 두께 ${currentThk} mm 평가 중`}
+            해석 {completed}회 완료 (예상 약 {est}회 · {percent}%)
+            {info && `  ·  경과 ${info.elapsed_s}초`}
+            {running && current && `  ·  ${current}`}
           </>
         )}
       </div>
       <ProgressBar percent={percent} />
+      {(isDesk || isPV) && (
+        <p style={{ color: "#888", fontSize: 12, marginTop: 4 }}>
+          탐색 중에 해석 횟수가 달라질 수 있어서 예상 횟수는 대략적인 값이에요.
+        </p>
+      )}
 
       {/* 버튼 */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "16px 0" }}>
@@ -392,18 +493,29 @@ function RealRun({ caseId }) {
         <p style={{ color: "#c62828", fontSize: 14 }}>
           해석이 실패했어요. 아래 로그의 마지막 줄을 확인하세요. ANSYS가 남아 있다면
           작업 관리자에서 끄고 다시 실행해 보세요.
+          {isPV &&
+            " 이 코드는 해석 횟수가 '최대 해석 횟수'에 닿으면 결과 없이 끝나니, 값을 늘려 보세요."}
         </p>
       )}
 
-      {/* 플랜지: 끝난 해석 결과 */}
+      {/* 플랜지 / 책상 / 압력용기: 끝난 해석 결과 */}
       {!isBeam && info && info.results.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           {info.results.map((line, i) => {
-            const r = parseResult(line);
+            const r = describeResult(line, evalLines[i], params.stress_limit_MPa ?? 180);
             if (!r)
               return (
                 <div key={i} style={{ fontSize: 14, fontFamily: "monospace" }}>
                   {`#${i} ${line.replace("[RESULT] ", "")}`}
+                </div>
+              );
+            if (r.failedSolve)
+              return (
+                <div
+                  key={i}
+                  style={{ fontSize: 14, fontFamily: "monospace", color: "#ef6c00" }}
+                >
+                  {`#${i}  ${r.design} → ANSYS가 풀지 못함 (불합격으로 처리)`}
                 </div>
               );
             return (
@@ -415,7 +527,7 @@ function RealRun({ caseId }) {
                   color: r.ok ? "#2e7d32" : "#c62828",
                 }}
               >
-                {`#${i}  두께 ${r.thk.toFixed(3)} mm → ${r.smax.toFixed(1)} MPa (허용 ${r.limit})  `}
+                {`#${i}  ${r.design} → ${r.smax.toFixed(2)} MPa (허용 ${r.limit})  `}
                 {r.ok ? "✓ 합격" : "✕ 불합격"}
               </div>
             );

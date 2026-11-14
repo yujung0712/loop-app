@@ -14,7 +14,7 @@ import {
 import DesignCompare from "../components/DesignCompare";
 import Checks from "../components/Checks";
 import BeamResult from "../components/BeamResult";
-import { API_BASE, CASE_FILES, adaptCase } from "../adapters";
+import { API_BASE, CASE_FILES, DEMO, adaptCase } from "../adapters";
 
 function Card({ title, value, sub }) {
   return (
@@ -30,6 +30,32 @@ function Card({ title, value, sub }) {
       <div style={{ fontSize: 28, fontWeight: "bold" }}>{value}</div>
       <div style={{ color: "#888", fontSize: 13 }}>{sub}</div>
     </div>
+  );
+}
+
+// 어느 결과인지 알려 주는 한 줄
+function SourceNote({ runId, meta }) {
+    if (DEMO) {
+    return <p style={{ color: "#888", fontSize: 14 }}>데모 버전: 저장해 둔 해석 결과예요</p>;
+  }
+  if (runId) {
+    return (
+      <p style={{ color: "#1565c0", fontSize: 14 }}>
+        방금 실행한 해석 결과예요 ({runId})
+      </p>
+    );
+  }
+  if (meta && meta.source === "last") {
+    return (
+      <p style={{ color: "#1565c0", fontSize: 14 }}>
+        마지막으로 실행한 결과예요 ({meta.finished_at} · 실행 {meta.run_id})
+      </p>
+    );
+  }
+  return (
+    <p style={{ color: "#888", fontSize: 14 }}>
+      저장해 둔 기본 결과예요 (이 케이스는 아직 실행한 적이 없어요)
+    </p>
   );
 }
 
@@ -66,30 +92,42 @@ function Result() {
     );
   if (!raw) return <p>불러오는 중...</p>;
 
+  const meta = raw._meta;
   const imageUrl = runId
     ? `${API_BASE}/api/runs/${runId}/image`
     : CASE_FILES[caseId].image;
 
   // 외팔보는 반복 기록이 없는 검증 케이스라서 화면이 따로 있어요
   if (caseId === "beam") {
-    return <BeamResult raw={raw} imageUrl={imageUrl} runId={runId} />;
+    return (
+      <div>
+        {!runId && <SourceNote runId={runId} meta={meta} />}
+        <BeamResult raw={raw} imageUrl={imageUrl} runId={runId} />
+      </div>
+    );
   }
 
   const view = adaptCase(caseId, raw);
+
+  // 풀리지 않은 설계는 막대를 그리지 않아요 (value가 null이면 막대가 없어요)
+  const failedIds = view.history.filter((h) => h.failed).map((h) => h.eval);
   const chartData = view.history.map((h) => ({
     eval: h.eval,
-    value: Number(h.value.toFixed(2)),
+    value: h.failed ? null : Number(h.value.toFixed(2)),
     feasible: h.feasible,
   }));
+
+  // 값 차이가 20배 넘게 크면 세로 축을 로그 눈금으로 바꿔요
+  const nums = chartData.map((d) => d.value).filter((v) => v !== null && v > 0);
+  const maxV = nums.length > 0 ? Math.max(...nums) : 1;
+  const minV = Math.min(...(nums.length > 0 ? nums : [1]), view.limit);
+  const useLog = nums.length > 0 && maxV / minV > 20;
+  const yDomain = useLog ? [Math.pow(10, Math.floor(Math.log10(minV))), "auto"] : [0, "auto"];
 
   return (
     <div>
       <h2>④ 결과 · {view.title}</h2>
-      {runId && (
-        <p style={{ color: "#1565c0", fontSize: 14 }}>
-          방금 실행한 해석 결과예요 ({runId})
-        </p>
-      )}
+      <SourceNote runId={runId} meta={meta} />
 
       {/* 상태 배너 */}
       <div
@@ -139,7 +177,12 @@ function Result() {
               dataKey="eval"
               label={{ value: "해석 번호", position: "insideBottom", offset: -4 }}
             />
-            <YAxis label={{ value: "MPa", angle: -90, position: "insideLeft" }} />
+            <YAxis
+              scale={useLog ? "log" : "linear"}
+              domain={yDomain}
+              allowDataOverflow
+              label={{ value: "MPa", angle: -90, position: "insideLeft" }}
+            />
             <Tooltip />
             <ReferenceLine
               y={view.limit}
@@ -162,6 +205,16 @@ function Result() {
       <p style={{ color: "#666", fontSize: 13 }}>
         빨간 막대 = 불합격, 초록 막대 = 합격, 초록 점선 = 허용응력
       </p>
+      {useLog && (
+        <p style={{ color: "#666", fontSize: 13, marginTop: -8 }}>
+          값 차이가 커서 세로 축은 로그 눈금이에요 (눈금 한 칸이 10배).
+        </p>
+      )}
+      {failedIds.length > 0 && (
+        <p style={{ color: "#ef6c00", fontSize: 13, marginTop: -8 }}>
+          ! 해석 번호 {failedIds.join(", ")}번은 ANSYS가 풀지 못해서 막대를 그리지 않았어요.
+        </p>
+      )}
 
       <div style={{ marginTop: 32 }}>
         <DesignCompare initial={view.initial} best={view.best} />

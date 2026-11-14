@@ -6,16 +6,17 @@ export const SCHEMAS = {
     title: "압력용기",
     sections: [
       {
-        name: "설계 변수 (시작값)",
-        note: "후보 목록은 problem.json 확인 후 채울 예정이에요.",
+        name: "설계 변수 (탐색 범위)",
+        note: "최소~최대를 같은 간격으로 4칸으로 나눈 값이 후보예요. 예: 12~21 mm → 12, 15, 18, 21 mm. 후보를 한 칸씩 바꿔 가며 가장 좋은 설계를 찾아요.",
         fields: [
-          { key: "main_wall_thk", label: "주관 두께", unit: "mm", kind: "value", value: 15 },
-          { key: "nozzle_wall_thk", label: "노즐 두께", unit: "mm", kind: "value", value: 10 },
-          { key: "pad_thk", label: "패드 두께", unit: "mm", kind: "value", value: 10 },
+          { key: "main_thk", label: "주관 두께", unit: "mm", kind: "range", min: 12, max: 21 },
+          { key: "nozzle_thk", label: "노즐 두께", unit: "mm", kind: "range", min: 8, max: 14 },
+          { key: "pad_thk", label: "패드 두께", unit: "mm", kind: "range", min: 6, max: 12 },
         ],
       },
       {
         name: "판정 기준",
+        note: "최대 해석 횟수에 닿으면 이 코드는 결과 없이 끝나요. 20 이상으로 넉넉하게 두세요.",
         fields: [
           { key: "stress_limit_MPa", label: "허용응력", unit: "MPa", kind: "value", value: 180 },
           { key: "weight_limit_N", label: "자중 제한", unit: "N", kind: "value", value: 25000 },
@@ -35,9 +36,11 @@ export const SCHEMAS = {
       },
     ],
     theory: (v) => {
-      const t = (v.pressure_MPa * (v.main_inner_d / 2)) / v.main_wall_thk;
-      if (!isFinite(t)) return null;
-      return `주관 이론 응력(pR/t)은 약 ${t.toFixed(1)} MPa예요. (노즐 연결부 응력 집중은 빠진 값)`;
+      const r = v.main_inner_d / 2;
+      const tMin = (v.pressure_MPa * r) / v.main_thk_min;
+      const tMax = (v.pressure_MPa * r) / v.main_thk_max;
+      if (!isFinite(tMin) || !isFinite(tMax)) return null;
+      return `주관 이론 응력(pR/t)은 두께 ${v.main_thk_min} mm에서 약 ${tMin.toFixed(1)} MPa, ${v.main_thk_max} mm에서 약 ${tMax.toFixed(1)} MPa예요. (노즐 연결부 응력 집중은 빠진 값)`;
     },
   },
 

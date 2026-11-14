@@ -13,27 +13,30 @@ export const LABELS = {
   pipe_wall_thk_mm: "파이프 두께",
 };
 
+// 데모 모드: 서버 없이 저장해 둔 결과만 보여 줘요 (빌드할 때 VITE_DEMO=true 로 켜요)
+export const DEMO = import.meta.env.VITE_DEMO === "true";
+
 // 파이썬 서버 주소
 export const API_BASE = "http://localhost:8000";
 
-// 케이스별 데이터 주소 (json과 그림 모두 서버에서)
+// 케이스별 데이터 주소 (json과 그림)
+// 서버가 있으면: 마지막으로 실행한 결과, 없으면 처음에 저장해 둔 결과
+// 데모 모드: public/demo 폴더의 파일
+function files(id) {
+  if (DEMO) {
+    return { json: `/demo/${id}.json`, image: `/demo/${id}_stress.png` };
+  }
+  return {
+    json: `${API_BASE}/api/cases/${id}/result`,
+    image: `${API_BASE}/api/cases/${id}/image`,
+  };
+}
+
 export const CASE_FILES = {
-  pressure_vessel: {
-    json: `${API_BASE}/api/cases/pressure_vessel/result`,
-    image: `${API_BASE}/api/cases/pressure_vessel/image`,
-  },
-  desk: {
-    json: `${API_BASE}/api/cases/desk/result`,
-    image: `${API_BASE}/api/cases/desk/image`,
-  },
-  flange: {
-    json: `${API_BASE}/api/cases/flange/result`,
-    image: `${API_BASE}/api/cases/flange/image`,
-  },
-  beam: {
-    json: `${API_BASE}/api/cases/beam/result`,
-    image: `${API_BASE}/api/cases/beam/image`,
-  },
+  pressure_vessel: files("pressure_vessel"),
+  desk: files("desk"),
+  flange: files("flange"),
+  beam: files("beam"),
 };
 
 function pick(obj, keys) {
@@ -50,9 +53,17 @@ function stressCard(value, limit) {
   };
 }
 
+// 실행할 때 입력한 값 (서버가 결과에 같이 넣어 줘요). 저장해 둔 기본 결과에는 없어요
+function inputsOf(raw) {
+  return (raw._meta && raw._meta.params) || {};
+}
+
 function adaptPressureVessel(raw) {
+  const P = inputsOf(raw);
   const best = raw.best_result;
-  const limit = 180; // 파일에 없어서 임시로 직접 적음
+  const limit = P.stress_limit_MPa ?? 180;
+  const weightLimit = P.weight_limit_N ?? 25000;
+  const maxEval = P.max_eval ?? 80;
   return {
     title: "압력용기",
     limit,
@@ -64,43 +75,57 @@ function adaptPressureVessel(raw) {
       value: h.Smax_MPa,
       feasible: h.feasible,
       design: h.design,
+      failed: Boolean(h.solve_failed),
     })),
     cards: [
       stressCard(best.Smax_MPa, limit),
       {
         title: "자중",
         value: `${best.self_weight_N.toFixed(0)} N`,
-        sub: "허용 25,000 N 이하",
+        sub: `허용 ${Number(weightLimit).toLocaleString()} N 이하`,
       },
-      { title: "해석 횟수", value: `${raw.n_evaluations}회`, sub: "최대 80회 중" },
+      { title: "해석 횟수", value: `${raw.n_evaluations}회`, sub: `최대 ${maxEval}회 중` },
     ],
   };
 }
 
 function adaptDesk(raw) {
-  const best = raw.best;
+  const P = inputsOf(raw);
+  const history = raw.history || [];
+  const best = raw.best; // 합격안이 없을 때 비어 있을 수 있어요
   const keys = ["leg_size_mm", "tabletop_thk_mm"];
-  const limit = best.stress_limit_MPa;
+
+  const ref = best || history[0];
+  const limit = ref.stress_limit_MPa;
+  // 합격안이 없으면 응력이 가장 낮았던 설계를 "최종"으로 보여줘요
+  const shown = best
+    ? best
+    : history.reduce((a, b) => (b.Smax_MPa < a.Smax_MPa ? b : a), history[0]);
+
   return {
     title: "책상",
     limit,
-    feasible: best.feasible,
-    initial: pick(raw.history[0], keys), // 처음 평가한 설계
-    best: pick(best, keys),
-    history: raw.history.map((h) => ({
+    feasible: Boolean(shown.feasible),
+    initial: pick(history[0], keys), // 처음 평가한 설계
+    best: pick(shown, keys),
+    history: history.map((h) => ({
       eval: h.eval,
       value: h.Smax_MPa,
       feasible: h.feasible,
       design: pick(h, keys),
     })),
     cards: [
-      stressCard(best.Smax_MPa, limit),
+      stressCard(shown.Smax_MPa, limit),
       {
         title: "부피",
-        value: `${(best.volume_mm3 / 1e6).toFixed(2)} L`,
-        sub: "작을수록 좋아요",
+        value: `${(shown.volume_mm3 / 1e6).toFixed(2)} L`,
+        sub: best ? "작을수록 좋아요" : "합격안이 없어서 응력이 가장 낮은 설계예요",
       },
-      { title: "해석 횟수", value: `${raw.n_evaluations}회`, sub: "최대 120회 중" },
+      {
+        title: "해석 횟수",
+        value: `${raw.n_evaluations ?? history.length}회`,
+        sub: `최대 ${P.max_eval ?? 120}회 중`,
+      },
     ],
   };
 }
