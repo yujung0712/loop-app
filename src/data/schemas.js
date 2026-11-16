@@ -157,6 +157,43 @@ export const SCHEMAS = {
     },
   },
 
+  fatigue: {
+    title: "구멍 뚫린 판 피로",
+    sections: [
+      {
+        name: "설계 변수 (탐색 범위)",
+        note: "최소~최대를 같은 간격으로 4칸으로 나눈 값이 후보예요. 예: 판 폭 100~160 mm → 100, 120, 140, 160 mm. 후보를 한 칸씩 바꿔 가며 필요 수명을 만족하는 가장 좋은 설계를 찾아요.",
+        fields: [
+          { key: "plate_width", label: "판 폭", unit: "mm", kind: "range", min: 100, max: 160 },
+          { key: "plate_thk", label: "판 두께", unit: "mm", kind: "range", min: 8, max: 14 },
+          { key: "hole_d", label: "구멍 지름", unit: "mm", kind: "range", min: 16, max: 28 },
+        ],
+      },
+      {
+        name: "판정 기준",
+        note: "필요 수명은 사이클 수예요. 수명이 길수록 좋은 설계이고, 허용 질량을 넘으면 불합격이에요. 최대 해석 횟수에 닿으면 이 코드는 결과 없이 끝나니 20 이상으로 두세요.",
+        fields: [
+          { key: "min_life_cycles", label: "필요 수명", unit: "사이클", kind: "value", value: 1000000 },
+          { key: "max_mass_kg", label: "허용 질량", unit: "kg", kind: "value", value: 5 },
+          { key: "max_eval", label: "최대 해석 횟수", unit: "회", kind: "value", value: 80 },
+        ],
+      },
+      {
+        name: "형상 · 하중 · 재료 (고정값)",
+        note: "왼쪽 끝이 고정이고, 오른쪽 끝을 변위로 반복해서 당겨요 (0 → 최대 변위 → 0). 메시 크기는 6 mm 이상이에요 (학생용 ANSYS의 노드 수 제한 때문이에요).",
+        fields: [
+          { key: "plate_length", label: "판 길이", unit: "mm", kind: "value", value: 300 },
+          { key: "ux_max_mm", label: "최대 반복 변위", unit: "mm", kind: "value", value: 0.15 },
+          { key: "E_MPa", label: "탄성계수", unit: "MPa", kind: "value", value: 200000 },
+          { key: "Su_MPa", label: "인장강도", unit: "MPa", kind: "value", value: 600 },
+          { key: "lc_global_mm", label: "전체 메시 크기", unit: "mm", kind: "value", value: 8 },
+          { key: "lc_hole_mm", label: "구멍 주변 메시 크기", unit: "mm", kind: "value", value: 3 },
+        ],
+      },
+    ],
+    theory: null,
+  },
+
   beam: {
     title: "외팔보",
     sections: [

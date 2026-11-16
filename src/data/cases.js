@@ -46,6 +46,6 @@ export const CASES = [
     kind: "최적화",
     method: "이웃 탐색",
     criterion: "수명 ≥ 100만 회, 질량 ≤ 5 kg",
-    ready: false,
+    ready: true,
   },
 ];

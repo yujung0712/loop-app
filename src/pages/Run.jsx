@@ -3,9 +3,9 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { API_BASE, CASE_FILES, adaptCase } from "../adapters";
 
 // 실제로 해석을 돌릴 수 있는 케이스
-const RUNNABLE = ["flange", "beam", "desk", "pressure_vessel", "tsb"];
+const RUNNABLE = ["flange", "beam", "desk", "pressure_vessel", "tsb", "fatigue"];
 
-// 플랜지 / 책상 / 압력용기 / TSB / 시뮬레이션용 단계
+// 플랜지 / 책상 / 압력용기 / TSB / 피로 / 시뮬레이션용 단계
 const STEPS = [
   "입력",
   "형상 생성",
@@ -105,6 +105,28 @@ const RUN_INFO = {
       lc_mm: "메시 크기(mm)",
     },
   },
+  fatigue: {
+    title: "구멍 뚫린 판 피로",
+    hint: "서버가 노트북의 ANSYS로 설계를 하나씩 바꿔 가며 해석해요. 설계 하나에 최대·최소 변위를 두 번 계산하고 약 20초, 보통 15~20개를 해석해서 7~10분 걸려요.",
+    steps: STEPS,
+    labels: {
+      plate_width_min: "판 폭 최소(mm)",
+      plate_width_max: "판 폭 최대(mm)",
+      plate_thk_min: "판 두께 최소(mm)",
+      plate_thk_max: "판 두께 최대(mm)",
+      hole_d_min: "구멍 지름 최소(mm)",
+      hole_d_max: "구멍 지름 최대(mm)",
+      min_life_cycles: "필요 수명(사이클)",
+      max_mass_kg: "허용 질량(kg)",
+      max_eval: "최대 해석 횟수",
+      plate_length: "판 길이(mm)",
+      ux_max_mm: "최대 반복 변위(mm)",
+      E_MPa: "탄성계수(MPa)",
+      Su_MPa: "인장강도(MPa)",
+      lc_global_mm: "전체 메시 크기(mm)",
+      lc_hole_mm: "구멍 주변 메시 크기(mm)",
+    },
+  },
   beam: {
     title: "외팔보",
     hint: "서버가 노트북의 ANSYS로 실제 해석을 돌려요. 외팔보는 해석을 1번만 하고, 1~2분 걸려요.",
@@ -134,6 +156,18 @@ function pad(n) {
   return String(n).padStart(3, "0");
 }
 
+// 사이클 수를 읽기 좋게: 3400000 -> 3.40×10⁶
+function fmtCycles(n) {
+  if (!(n > 0)) return "0";
+  const exp = Math.floor(Math.log10(n));
+  const mant = n / Math.pow(10, exp);
+  const sup = String(exp)
+    .split("")
+    .map((c) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[Number(c)] ?? c)
+    .join("");
+  return `${mant.toFixed(2)}×10${sup}`;
+}
+
 function CaseLinks() {
   return (
     <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
@@ -142,6 +176,7 @@ function CaseLinks() {
       <Link to="/run/flange">플랜지</Link>
       <Link to="/run/beam">외팔보</Link>
       <Link to="/run/tsb">TSB 봉</Link>
+      <Link to="/run/fatigue">피로</Link>
     </div>
   );
 }
@@ -191,7 +226,7 @@ function ProgressBar({ percent }) {
   );
 }
 
-// ---- 플랜지 / 책상 / 압력용기 / TSB: 로그 한 줄을 보고 지금 어느 단계인지 추정해요 (모르면 null) ----
+// ---- 플랜지 / 책상 / 압력용기 / TSB / 피로: 로그 한 줄을 보고 지금 어느 단계인지 추정해요 (모르면 null) ----
 function flangeStepOf(line) {
   if (line.includes("[RESULT]") || line.includes("[BISECTION]")) return 5;
   if (line.includes("post done")) return 5;
@@ -230,9 +265,32 @@ const BEAM_SUMMARY_KEYS = [
   "EB max bend stress",
 ];
 
-// "[RESULT] ..." 줄을 읽기 좋게 바꿔요 (플랜지 / 책상 / 압력용기 / TSB)
+// "[RESULT] ..." 줄을 읽기 좋게 바꿔요 (플랜지 / 책상 / 압력용기 / TSB / 피로)
 // evalLine: 같은 순서의 "[EVAL 003] ..." 또는 "[ITER 003] ..." 줄 (설계 값이 들어 있어요)
 function describeResult(line, evalLine, pvLimit) {
+  // 피로: life=... cycles | min_life=... | mass=... kg | max_mass=... kg | feasible=...
+  const ft = line.match(
+    /life=([\d.eE+-]+) cycles \| min_life=([\d.eE+-]+) cycles \| mass=([\d.eE+-]+) kg \| max_mass=([\d.eE+-]+) kg \| feasible=(True|False)/
+  );
+  if (ft) {
+    const life = Number(ft[1]);
+    const minLife = Number(ft[2]);
+    const mass = Number(ft[3]);
+    const ok = ft[5] === "True";
+    const lifeOk = life >= minLife;
+    let design = "";
+    if (evalLine) {
+      const d = evalLine.match(/W=([\d.]+) \| T=([\d.]+) \| D=([\d.]+)/);
+      if (d) design = `폭 ${Number(d[1])} · 두께 ${Number(d[2])} · 구멍 ${Number(d[3])} mm`;
+    }
+    const verdict = ok ? "✓ 합격" : !lifeOk ? "✕ 수명 부족" : "✕ 질량 초과";
+    return {
+      text: `${design} → 수명 ${fmtCycles(life)} 사이클 · 질량 ${mass.toFixed(2)} kg  ${verdict}`,
+      color: ok ? "#2e7d32" : lifeOk ? "#ef6c00" : "#c62828",
+      failedSolve: false,
+    };
+  }
+
   // TSB: Uabs=... mm | limit=... mm | feasible=...
   const ts = line.match(
     /Uabs=([\d.eE+-]+) mm \| limit=([\d.eE+-]+) mm \| feasible=(True|False)/
@@ -311,6 +369,7 @@ function RealRun({ caseId }) {
   const isDesk = caseId === "desk";
   const isPV = caseId === "pressure_vessel";
   const isTsb = caseId === "tsb";
+  const isFatigue = caseId === "fatigue";
   const [searchParams, setSearchParams] = useSearchParams();
   const runId = searchParams.get("run");
   const [info, setInfo] = useState(null);
@@ -413,7 +472,7 @@ function RealRun({ caseId }) {
     const tol = params.tol_mm ?? 0.01;
     const maxIter = params.max_iter ?? 20;
     est = Math.max(1, Math.min(maxIter, Math.ceil(Math.log2((hi - lo) / tol))));
-  } else if (isPV) {
+  } else if (isPV || isFatigue) {
     // 이웃 설계를 한 칸씩 바꿔 보는 탐색이라 횟수가 달라져요. 보통 15~25번이에요
     est = 18;
   } else if (isDesk) {
@@ -449,11 +508,14 @@ function RealRun({ caseId }) {
       /main_wall_thk=([\d.]+) \| nozzle_wall_thk=([\d.]+) \| pad_thk=([\d.]+)/
     );
     const t = lastEval.match(/cyl_d = ([\d.]+) mm/);
+    const ft = lastEval.match(/W=([\d.]+) \| T=([\d.]+) \| D=([\d.]+)/);
     if (f) current = `지금 두께 ${Number(f[1])} mm 평가 중`;
     else if (d) current = `지금 다리 ${Number(d[1])} · 상판 ${Number(d[2])} mm 평가 중`;
     else if (p)
       current = `지금 주관 ${Number(p[1])} · 노즐 ${Number(p[2])} · 패드 ${Number(p[3])} mm 평가 중`;
     else if (t) current = `지금 지름 ${Number(t[1]).toFixed(2)} mm 평가 중`;
+    else if (ft)
+      current = `지금 폭 ${Number(ft[1])} · 두께 ${Number(ft[2])} · 구멍 ${Number(ft[3])} mm 평가 중`;
   }
 
   // 외팔보: 결과 요약 줄
@@ -509,7 +571,7 @@ function RealRun({ caseId }) {
         )}
       </div>
       <ProgressBar percent={percent} />
-      {(isDesk || isPV) && (
+      {(isDesk || isPV || isFatigue) && (
         <p style={{ color: "#888", fontSize: 12, marginTop: 4 }}>
           탐색 중에 해석 횟수가 달라질 수 있어서 예상 횟수는 대략적인 값이에요.
         </p>
@@ -548,12 +610,12 @@ function RealRun({ caseId }) {
         <p style={{ color: "#c62828", fontSize: 14 }}>
           해석이 실패했어요. 아래 로그의 마지막 줄을 확인하세요. ANSYS가 남아 있다면
           작업 관리자에서 끄고 다시 실행해 보세요.
-          {isPV &&
+          {(isPV || isFatigue) &&
             " 이 코드는 해석 횟수가 '최대 해석 횟수'에 닿으면 결과 없이 끝나니, 값을 늘려 보세요."}
         </p>
       )}
 
-      {/* 플랜지 / 책상 / 압력용기 / TSB: 끝난 해석 결과 */}
+      {/* 플랜지 / 책상 / 압력용기 / TSB / 피로: 끝난 해석 결과 */}
       {!isBeam && info && info.results.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           {info.results.map((line, i) => {
@@ -562,6 +624,15 @@ function RealRun({ caseId }) {
               return (
                 <div key={i} style={{ fontSize: 14, fontFamily: "monospace" }}>
                   {`#${i} ${line.replace("[RESULT] ", "")}`}
+                </div>
+              );
+            if (r.text)
+              return (
+                <div
+                  key={i}
+                  style={{ fontSize: 14, fontFamily: "monospace", color: r.color }}
+                >
+                  {`#${i}  ${r.text}`}
                 </div>
               );
             if (r.failedSolve)

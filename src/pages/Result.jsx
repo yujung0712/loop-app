@@ -16,6 +16,9 @@ import Checks from "../components/Checks";
 import BeamResult from "../components/BeamResult";
 import { API_BASE, CASE_FILES, DEMO, adaptCase } from "../adapters";
 
+// 막대 색: 초록 = 합격, 주황 = 일부만 부족, 빨강 = 불합격
+const STATUS_COLOR = { ok: "#2e7d32", warn: "#ef6c00", bad: "#c62828" };
+
 function Card({ title, value, sub }) {
   return (
     <div
@@ -122,6 +125,7 @@ function Result() {
     eval: h.eval,
     value: h.failed ? null : Number(h.value.toFixed(digits)),
     feasible: h.feasible,
+    status: h.status || (h.feasible ? "ok" : "bad"),
   }));
 
   // 값 차이가 20배 넘게 크면 세로 축을 로그 눈금으로 바꿔요
@@ -148,7 +152,7 @@ function Result() {
       >
         {view.feasible
           ? "✓ 합격한 설계를 찾았어요"
-          : "✕ 합격한 설계를 찾지 못했어요. 모든 설계가 기준을 넘었어요"}
+          : "✕ 합격한 설계를 찾지 못했어요. 모든 설계가 기준을 만족하지 못했어요"}
       </div>
 
       {/* 수치 카드 */}
@@ -188,29 +192,31 @@ function Result() {
               scale={useLog ? "log" : "linear"}
               domain={yDomain}
               allowDataOverflow
+              tickFormatter={view.tickFormatter}
               label={{ value: unit, angle: -90, position: "insideLeft" }}
             />
-            <Tooltip formatter={(v) => `${v} ${unit}`} />
+            <Tooltip formatter={(v) => `${Number(v).toLocaleString()} ${unit}`} />
             <ReferenceLine
               y={view.limit}
               stroke="#2e7d32"
               strokeDasharray="6 4"
               label={{
-                value: `${limitName} ${view.limit} ${unit}`,
+                value: `${limitName} ${Number(view.limit).toLocaleString()} ${unit}`,
                 position: "right",
                 fill: "#2e7d32",
               }}
             />
             <Bar dataKey="value">
               {chartData.map((d) => (
-                <Cell key={d.eval} fill={d.feasible ? "#2e7d32" : "#c62828"} />
+                <Cell key={d.eval} fill={STATUS_COLOR[d.status]} />
               ))}
             </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
       <p style={{ color: "#666", fontSize: 13 }}>
-        빨간 막대 = 불합격, 초록 막대 = 합격, 초록 점선 = {limitName}
+        {view.legend ||
+          `빨간 막대 = 불합격, 초록 막대 = 합격, 초록 점선 = ${limitName}`}
       </p>
       {useLog && (
         <p style={{ color: "#666", fontSize: 13, marginTop: -8 }}>

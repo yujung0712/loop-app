@@ -12,6 +12,10 @@ export const LABELS = {
   tabletop_thk_mm: "상판 두께",
   pipe_wall_thk_mm: "파이프 두께",
   cyl_d_mm: "원기둥 지름",
+  plate_length: "판 길이",
+  plate_width: "판 폭",
+  plate_thk: "판 두께",
+  hole_d: "구멍 지름",
 };
 
 // 데모 모드: 서버 없이 저장해 둔 결과만 보여 줘요 (빌드할 때 VITE_DEMO=true 로 켜요)
@@ -39,6 +43,7 @@ export const CASE_FILES = {
   flange: files("flange"),
   beam: files("beam"),
   tsb: files("tsb"),
+  fatigue: files("fatigue"),
 };
 
 function pick(obj, keys) {
@@ -249,11 +254,75 @@ function adaptTsb(raw) {
   };
 }
 
+// 사이클 수를 읽기 좋게: 3400000 -> 3.40×10⁶
+function fmtCycles(n) {
+  if (!(n > 0)) return "0";
+  const exp = Math.floor(Math.log10(n));
+  const mant = n / Math.pow(10, exp);
+  const sup = String(exp)
+    .split("")
+    .map((c) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[Number(c)] ?? c)
+    .join("");
+  return `${mant.toFixed(2)}×10${sup}`;
+}
+
+function adaptFatigue(raw) {
+  const P = inputsOf(raw);
+  const history = raw.history || [];
+  const best = raw.best_result;
+  const minLife = P.min_life_cycles ?? 1000000;
+  const maxMass = P.max_mass_kg ?? 5;
+  // 초록: 합격 / 주황: 수명은 충분한데 질량 초과 / 빨강: 수명 부족
+  const statusOf = (h) => (h.feasible ? "ok" : h.life_ok ? "warn" : "bad");
+
+  return {
+    title: "구멍 뚫린 판 피로",
+    unit: "사이클",
+    metric: "수명",
+    limitName: "필요 수명",
+    imageTitle: "응력 분포 (최종 설계, 최대 변위일 때)",
+    digits: 0,
+    limit: minLife,
+    feasible: Boolean(best.feasible),
+    initial: raw.initial_design,
+    best: raw.best_design,
+    history: history.map((h) => ({
+      eval: h.eval,
+      value: h.top3_life_cycles,
+      feasible: h.feasible,
+      status: statusOf(h),
+      design: h.design,
+    })),
+    legend:
+      "초록 = 합격 · 주황 = 수명은 충분하지만 질량이 허용을 넘음 · 빨강 = 수명 부족 · 초록 점선 = 필요 수명",
+    failDetail: `${history.length}번 해석한 설계가 전부 수명 또는 질량 기준을 만족하지 못했어요. 허용 질량을 늘리거나 설계 범위를 넓혀 보세요.`,
+    tickFormatter: (v) => Number(v).toExponential(0).replace("e+", "e"),
+    cards: [
+      {
+        title: "수명 (상위 3점 평균)",
+        value: `${fmtCycles(best.top3_life_cycles)} 사이클`,
+        sub: `필요 ${fmtCycles(minLife)} 이상 · ${(best.top3_life_cycles / minLife).toFixed(1)}배`,
+      },
+      {
+        title: "질량",
+        value: `${best.mass_kg.toFixed(2)} kg`,
+        sub: `허용 ${maxMass} kg 이하`,
+      },
+      {
+        title: "해석 횟수",
+        value: `${raw.n_evaluations ?? history.length}회`,
+        sub: `최대 ${P.max_eval ?? 80}회 중`,
+      },
+    ],
+  };
+}
+
 const ADAPTERS = {
   pressure_vessel: adaptPressureVessel,
   desk: adaptDesk,
   flange: adaptFlange,
   tsb: adaptTsb,
+  fatigue: adaptFatigue,
 };
 
 export function adaptCase(caseId, raw) {

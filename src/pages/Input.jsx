@@ -4,7 +4,7 @@ import { SCHEMAS } from "../data/schemas";
 import { API_BASE, CASE_FILES } from "../adapters";
 
 // 입력값을 서버로 보내서 실제로 해석하는 케이스
-const RUNNABLE = ["flange", "beam", "desk", "pressure_vessel", "tsb"];
+const RUNNABLE = ["flange", "beam", "desk", "pressure_vessel", "tsb", "fatigue"];
 
 // 처음 입력값 만들기: 숫자 칸마다 문자열로 저장
 function makeInitial(schema) {
@@ -105,6 +105,8 @@ function InputForm({ caseId, schema }) {
         <Link to="/input/desk">책상</Link>
         <Link to="/input/flange">플랜지</Link>
         <Link to="/input/beam">외팔보</Link>
+        <Link to="/input/tsb">TSB 봉</Link>
+        <Link to="/input/fatigue">피로</Link>
       </div>
 
       {realRun ? (
