@@ -3,16 +3,16 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { API_BASE, CASE_FILES, adaptCase } from "../adapters";
 
 // 실제로 해석을 돌릴 수 있는 케이스
-const RUNNABLE = ["flange", "beam", "desk", "pressure_vessel"];
+const RUNNABLE = ["flange", "beam", "desk", "pressure_vessel", "tsb"];
 
-// 플랜지 / 책상 / 압력용기 / 시뮬레이션용 단계
+// 플랜지 / 책상 / 압력용기 / TSB / 시뮬레이션용 단계
 const STEPS = [
   "입력",
   "형상 생성",
   "메시 크기",
   "메시 생성",
   "해석",
-  "허용응력 평가",
+  "허용값 평가",
   "결과 출력",
 ];
 // 외팔보용 단계
@@ -86,6 +86,25 @@ const RUN_INFO = {
       pressure_MPa: "내압(MPa)",
     },
   },
+  tsb: {
+    title: "TSB 봉",
+    hint: "서버가 노트북의 ANSYS로 지름을 반씩 좁혀 가며 해석해요. 해석 한 번에 약 40초, 허용오차 0.5 mm면 약 8번(5분 안팎)이에요.",
+    steps: STEPS,
+    labels: {
+      cyl_d_min: "지름 최소(mm)",
+      cyl_d_max: "지름 최대(mm)",
+      u_limit_mm: "허용 변위(mm)",
+      tol_mm: "허용오차(mm)",
+      max_iter: "최대 반복 횟수",
+      L_total: "전체 길이(mm)",
+      L_sq: "사각 구간 길이(mm)",
+      sq_w: "사각 폭(mm)",
+      sq_h: "사각 높이(mm)",
+      load_N: "하중(N)",
+      E_MPa: "탄성계수(MPa)",
+      lc_mm: "메시 크기(mm)",
+    },
+  },
   beam: {
     title: "외팔보",
     hint: "서버가 노트북의 ANSYS로 실제 해석을 돌려요. 외팔보는 해석을 1번만 하고, 1~2분 걸려요.",
@@ -117,11 +136,12 @@ function pad(n) {
 
 function CaseLinks() {
   return (
-    <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+    <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
       <Link to="/run/pressure_vessel">압력용기</Link>
       <Link to="/run/desk">책상</Link>
       <Link to="/run/flange">플랜지</Link>
       <Link to="/run/beam">외팔보</Link>
+      <Link to="/run/tsb">TSB 봉</Link>
     </div>
   );
 }
@@ -171,7 +191,7 @@ function ProgressBar({ percent }) {
   );
 }
 
-// ---- 플랜지 / 책상 / 압력용기: 로그 한 줄을 보고 지금 어느 단계인지 추정해요 (모르면 null) ----
+// ---- 플랜지 / 책상 / 압력용기 / TSB: 로그 한 줄을 보고 지금 어느 단계인지 추정해요 (모르면 null) ----
 function flangeStepOf(line) {
   if (line.includes("[RESULT]") || line.includes("[BISECTION]")) return 5;
   if (line.includes("post done")) return 5;
@@ -182,7 +202,7 @@ function flangeStepOf(line) {
   if (line.includes("[2/3]") || line.includes("[MAPDL]")) return 3;
   if (line.includes("mesh.generate") || line.includes("[GMSH] detect")) return 3;
   if (line.includes("[GMSH] initialize")) return 2;
-  if (line.includes("[1/3]") || line.includes("[EVAL")) return 1;
+  if (line.includes("[1/3]") || line.includes("[EVAL") || line.includes("[ITER")) return 1;
   return null;
 }
 
@@ -210,9 +230,30 @@ const BEAM_SUMMARY_KEYS = [
   "EB max bend stress",
 ];
 
-// "[RESULT] ..." 줄을 읽기 좋게 바꿔요 (플랜지 / 책상 / 압력용기)
-// evalLine: 같은 순서의 "[EVAL 003] ..." 줄 (설계 값이 들어 있어요)
+// "[RESULT] ..." 줄을 읽기 좋게 바꿔요 (플랜지 / 책상 / 압력용기 / TSB)
+// evalLine: 같은 순서의 "[EVAL 003] ..." 또는 "[ITER 003] ..." 줄 (설계 값이 들어 있어요)
 function describeResult(line, evalLine, pvLimit) {
+  // TSB: Uabs=... mm | limit=... mm | feasible=...
+  const ts = line.match(
+    /Uabs=([\d.eE+-]+) mm \| limit=([\d.eE+-]+) mm \| feasible=(True|False)/
+  );
+  if (ts) {
+    let design = "";
+    if (evalLine) {
+      const d = evalLine.match(/cyl_d = ([\d.]+) mm/);
+      if (d) design = `지름 ${Number(d[1]).toFixed(3)} mm`;
+    }
+    return {
+      value: Number(ts[1]),
+      limit: Number(ts[2]),
+      ok: ts[3] === "True",
+      design,
+      unit: "mm",
+      digits: 3,
+      failedSolve: false,
+    };
+  }
+
   // 압력용기: Smax=... | self-weight=... | feasible=...
   const pv = line.match(
     /Smax=([\d.eE+-]+) MPa \| self-weight=([\d.eE+-]+) N \| feasible=(True|False)/
@@ -227,10 +268,12 @@ function describeResult(line, evalLine, pvLimit) {
     }
     const smax = Number(pv[1]);
     return {
-      smax,
+      value: smax,
       limit: pvLimit,
       ok: pv[3] === "True",
       design,
+      unit: "MPa",
+      digits: 2,
       failedSolve: Math.abs(smax - 10000) < 0.001, // 풀리지 않은 설계에 서버 코드가 주는 벌점 값(정확히 10000)
     };
   }
@@ -251,10 +294,12 @@ function describeResult(line, evalLine, pvLimit) {
   }
   if (vol) design += ` · 부피 ${(Number(vol[1]) / 1e6).toFixed(2)} L`;
   return {
-    smax: Number(m[1]),
+    value: Number(m[1]),
     limit: Number(m[2]),
     ok: m[3] === "True",
     design,
+    unit: "MPa",
+    digits: 2,
     failedSolve: false,
   };
 }
@@ -265,6 +310,7 @@ function RealRun({ caseId }) {
   const isBeam = caseId === "beam";
   const isDesk = caseId === "desk";
   const isPV = caseId === "pressure_vessel";
+  const isTsb = caseId === "tsb";
   const [searchParams, setSearchParams] = useSearchParams();
   const runId = searchParams.get("run");
   const [info, setInfo] = useState(null);
@@ -360,7 +406,14 @@ function RealRun({ caseId }) {
 
   // 예상 해석 횟수 (추정)
   let est;
-  if (isPV) {
+  if (isTsb) {
+    // 이분법: 지름 범위를 허용오차 이하로 좁힐 때까지 반으로 줄여요
+    const lo = params.cyl_d_min ?? 40;
+    const hi = params.cyl_d_max ?? 120;
+    const tol = params.tol_mm ?? 0.01;
+    const maxIter = params.max_iter ?? 20;
+    est = Math.max(1, Math.min(maxIter, Math.ceil(Math.log2((hi - lo) / tol))));
+  } else if (isPV) {
     // 이웃 설계를 한 칸씩 바꿔 보는 탐색이라 횟수가 달라져요. 보통 15~25번이에요
     est = 18;
   } else if (isDesk) {
@@ -386,7 +439,7 @@ function RealRun({ caseId }) {
     percent = done ? 100 : Math.min(95, Math.round((completed / est) * 100));
   }
 
-  // 지금 평가 중인 설계 (가장 최근 [EVAL ...] 줄)
+  // 지금 평가 중인 설계 (가장 최근 [EVAL ...] 또는 [ITER ...] 줄)
   let current = null;
   const lastEval = evalLines.length > 0 ? evalLines[evalLines.length - 1] : "";
   if (lastEval) {
@@ -395,10 +448,12 @@ function RealRun({ caseId }) {
     const p = lastEval.match(
       /main_wall_thk=([\d.]+) \| nozzle_wall_thk=([\d.]+) \| pad_thk=([\d.]+)/
     );
+    const t = lastEval.match(/cyl_d = ([\d.]+) mm/);
     if (f) current = `지금 두께 ${Number(f[1])} mm 평가 중`;
     else if (d) current = `지금 다리 ${Number(d[1])} · 상판 ${Number(d[2])} mm 평가 중`;
     else if (p)
       current = `지금 주관 ${Number(p[1])} · 노즐 ${Number(p[2])} · 패드 ${Number(p[3])} mm 평가 중`;
+    else if (t) current = `지금 지름 ${Number(t[1]).toFixed(2)} mm 평가 중`;
   }
 
   // 외팔보: 결과 요약 줄
@@ -498,7 +553,7 @@ function RealRun({ caseId }) {
         </p>
       )}
 
-      {/* 플랜지 / 책상 / 압력용기: 끝난 해석 결과 */}
+      {/* 플랜지 / 책상 / 압력용기 / TSB: 끝난 해석 결과 */}
       {!isBeam && info && info.results.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           {info.results.map((line, i) => {
@@ -527,7 +582,7 @@ function RealRun({ caseId }) {
                   color: r.ok ? "#2e7d32" : "#c62828",
                 }}
               >
-                {`#${i}  ${r.design} → ${r.smax.toFixed(2)} MPa (허용 ${r.limit})  `}
+                {`#${i}  ${r.design} → ${r.value.toFixed(r.digits)} ${r.unit} (허용 ${r.limit})  `}
                 {r.ok ? "✓ 합격" : "✕ 불합격"}
               </div>
             );
@@ -705,7 +760,7 @@ function SimRun() {
             {Object.entries(h.design)
               .map(([k, v]) => `${k}=${v}`)
               .join(" ")}
-            {` → Smax=${h.value.toFixed(1)} MPa `}
+            {` → 값=${h.value.toFixed(1)} `}
             <span style={{ color: h.feasible ? "#81c784" : "#e57373" }}>
               {h.feasible ? "합격" : "불합격"}
             </span>

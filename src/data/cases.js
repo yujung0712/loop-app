@@ -38,7 +38,7 @@ export const CASES = [
     kind: "최적화",
     method: "이분법",
     criterion: "끝단 변위 ≤ 2.5 mm",
-    ready: false,
+    ready: true,
   },
   {
     id: "fatigue",

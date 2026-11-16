@@ -11,6 +11,7 @@ export const LABELS = {
   leg_size_mm: "다리 굵기",
   tabletop_thk_mm: "상판 두께",
   pipe_wall_thk_mm: "파이프 두께",
+  cyl_d_mm: "원기둥 지름",
 };
 
 // 데모 모드: 서버 없이 저장해 둔 결과만 보여 줘요 (빌드할 때 VITE_DEMO=true 로 켜요)
@@ -37,6 +38,7 @@ export const CASE_FILES = {
   desk: files("desk"),
   flange: files("flange"),
   beam: files("beam"),
+  tsb: files("tsb"),
 };
 
 function pick(obj, keys) {
@@ -179,10 +181,79 @@ function adaptFlange(raw) {
   };
 }
 
+// TSB 봉의 이론 최소 지름: 축 방향 인장 변위 δ = F L / (E A) 를 허용값 이하로 만드는 지름
+function tsbTheoryMinD(P, limit) {
+  const F = P.load_N ?? 100000;
+  const E = P.E_MPa ?? 10000;
+  const Ltot = P.L_total ?? 1000;
+  const Lsq = P.L_sq ?? 500;
+  const Asq = (P.sq_w ?? 100) * (P.sq_h ?? 100);
+  const rest = limit - (F * Lsq) / (E * Asq); // 사각 구간이 쓰고 남은 허용 변위
+  if (!(rest > 0)) return null;
+  const A = (F * (Ltot - Lsq)) / (E * rest);
+  return Math.sqrt((4 * A) / Math.PI);
+}
+
+function adaptTsb(raw) {
+  const P = inputsOf(raw);
+  const history = raw.history || [];
+  const keys = ["cyl_d_mm"];
+  // 합격한 지름이 없으면 코드가 마지막으로 시도한 값을 best에 넣어 줘요
+  const shown = raw.best || history[history.length - 1];
+  const limit = shown.U_limit_mm;
+  const theory = tsbTheoryMinD(P, limit);
+
+  return {
+    title: "TSB 봉",
+    // 결과 화면의 단위와 이름 (없으면 응력 기준으로 보여줘요)
+    unit: "mm",
+    metric: "끝단 변위",
+    limitName: "허용 변위",
+    imageTitle: "변위 분포 (최종 설계, 높이 방향)",
+    digits: 3,
+    limit,
+    feasible: Boolean(shown.feasible),
+    initial: pick(history[0], keys), // 처음 시도한 지름
+    best: pick(shown, keys),
+    history: history.map((h) => ({
+      eval: h.iter,
+      value: h.Uabs_mm,
+      feasible: h.feasible,
+      design: pick(h, keys),
+    })),
+    cards: [
+      {
+        title: "끝단 변위",
+        value: `${shown.Uabs_mm.toFixed(3)} mm`,
+        sub: `허용 ${limit} mm의 ${(shown.Uabs_mm / limit).toFixed(2)}배`,
+      },
+      shown.feasible
+        ? {
+            title: "최소 합격 지름",
+            value: `${shown.cyl_d_mm.toFixed(2)} mm`,
+            sub: theory ? `이론 최소 약 ${theory.toFixed(1)} mm` : "이론 계산 불가",
+          }
+        : {
+            title: "합격 지름",
+            value: "없음",
+            sub: theory
+              ? `이론 최소 약 ${theory.toFixed(1)} mm (탐색 범위 밖일 수 있어요)`
+              : "탐색 범위를 넓혀 보세요",
+          },
+      {
+        title: "해석 횟수",
+        value: `${history.length}회`,
+        sub: `이분법 (허용오차 ${P.tol_mm ?? 0.01} mm)`,
+      },
+    ],
+  };
+}
+
 const ADAPTERS = {
   pressure_vessel: adaptPressureVessel,
   desk: adaptDesk,
   flange: adaptFlange,
+  tsb: adaptTsb,
 };
 
 export function adaptCase(caseId, raw) {

@@ -35,7 +35,7 @@ function Card({ title, value, sub }) {
 
 // 어느 결과인지 알려 주는 한 줄
 function SourceNote({ runId, meta }) {
-    if (DEMO) {
+  if (DEMO) {
     return <p style={{ color: "#888", fontSize: 14 }}>데모 버전: 저장해 둔 해석 결과예요</p>;
   }
   if (runId) {
@@ -109,11 +109,18 @@ function Result() {
 
   const view = adaptCase(caseId, raw);
 
+  // 케이스마다 다른 단위와 이름 (정해 주지 않으면 응력 기준이에요)
+  const unit = view.unit || "MPa";
+  const metric = view.metric || "최대응력";
+  const limitName = view.limitName || "허용응력";
+  const imageTitle = view.imageTitle || "응력 분포 (최종 설계)";
+  const digits = view.digits ?? 2;
+
   // 풀리지 않은 설계는 막대를 그리지 않아요 (value가 null이면 막대가 없어요)
   const failedIds = view.history.filter((h) => h.failed).map((h) => h.eval);
   const chartData = view.history.map((h) => ({
     eval: h.eval,
-    value: h.failed ? null : Number(h.value.toFixed(2)),
+    value: h.failed ? null : Number(h.value.toFixed(digits)),
     feasible: h.feasible,
   }));
 
@@ -151,11 +158,11 @@ function Result() {
         ))}
       </div>
 
-      {/* 응력 그림 */}
-      <h3 style={{ marginTop: 32 }}>응력 분포 (최종 설계)</h3>
+      {/* 해석 그림 */}
+      <h3 style={{ marginTop: 32 }}>{imageTitle}</h3>
       <img
         src={imageUrl}
-        alt="최종 설계의 응력 분포"
+        alt={imageTitle}
         style={{
           maxWidth: "100%",
           maxHeight: 420,
@@ -168,7 +175,7 @@ function Result() {
       />
 
       {/* 반복 기록 차트 */}
-      <h3 style={{ marginTop: 32 }}>반복별 최대응력</h3>
+      <h3 style={{ marginTop: 32 }}>반복별 {metric}</h3>
       <div style={{ width: "100%", height: 320 }}>
         <ResponsiveContainer>
           <BarChart data={chartData}>
@@ -181,15 +188,15 @@ function Result() {
               scale={useLog ? "log" : "linear"}
               domain={yDomain}
               allowDataOverflow
-              label={{ value: "MPa", angle: -90, position: "insideLeft" }}
+              label={{ value: unit, angle: -90, position: "insideLeft" }}
             />
-            <Tooltip />
+            <Tooltip formatter={(v) => `${v} ${unit}`} />
             <ReferenceLine
               y={view.limit}
               stroke="#2e7d32"
               strokeDasharray="6 4"
               label={{
-                value: `허용 ${view.limit} MPa`,
+                value: `${limitName} ${view.limit} ${unit}`,
                 position: "right",
                 fill: "#2e7d32",
               }}
@@ -203,7 +210,7 @@ function Result() {
         </ResponsiveContainer>
       </div>
       <p style={{ color: "#666", fontSize: 13 }}>
-        빨간 막대 = 불합격, 초록 막대 = 합격, 초록 점선 = 허용응력
+        빨간 막대 = 불합격, 초록 막대 = 합격, 초록 점선 = {limitName}
       </p>
       {useLog && (
         <p style={{ color: "#666", fontSize: 13, marginTop: -8 }}>

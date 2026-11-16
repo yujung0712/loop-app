@@ -17,7 +17,7 @@ function Checks({ view, raw, caseId }) {
     items.push({
       level: "error",
       title: "합격한 설계가 하나도 없어요",
-      detail: `${history.length}번 해석한 설계가 전부 허용응력을 넘었어요. 설계 범위나 해석 조건을 확인하세요.`,
+      detail: `${history.length}번 해석한 설계가 전부 ${view.limitName || "허용응력"}을(를) 넘었어요. 설계 범위나 해석 조건을 확인하세요.`,
     });
   }
 

@@ -110,6 +110,53 @@ export const SCHEMAS = {
     },
   },
 
+  tsb: {
+    title: "TSB 봉",
+    sections: [
+      {
+        name: "설계 변수 (탐색 범위)",
+        note: "아래쪽 사각 구간은 고정이고, 위쪽 원기둥 구간의 지름을 바꿔요. 이 범위 안에서 지름을 반씩 좁혀 가며 허용 변위를 만족하는 가장 가는 지름을 찾아요.",
+        fields: [
+          { key: "cyl_d", label: "원기둥 지름", unit: "mm", kind: "range", min: 40, max: 120 },
+        ],
+      },
+      {
+        name: "판정 기준",
+        note: "허용오차는 작을수록 정확하지만 해석 횟수가 늘어요. 메시 때문에 값이 몇 % 흔들려서 0.5 mm 정도면 충분해요. (0.5 mm면 약 8번, 0.01 mm면 약 13번)",
+        fields: [
+          { key: "u_limit_mm", label: "허용 끝단 변위", unit: "mm", kind: "value", value: 2.5 },
+          { key: "tol_mm", label: "이분법 허용오차", unit: "mm", kind: "value", value: 0.5 },
+          { key: "max_iter", label: "최대 반복 횟수", unit: "회", kind: "value", value: 20 },
+        ],
+      },
+      {
+        name: "형상 · 하중 (고정값)",
+        note: "바닥(아래 끝)이 고정이고, 위 끝면을 위로 잡아당기는 인장 하중이에요.",
+        fields: [
+          { key: "L_total", label: "전체 길이", unit: "mm", kind: "value", value: 1000 },
+          { key: "L_sq", label: "사각 구간 길이", unit: "mm", kind: "value", value: 500 },
+          { key: "sq_w", label: "사각 폭", unit: "mm", kind: "value", value: 100 },
+          { key: "sq_h", label: "사각 높이", unit: "mm", kind: "value", value: 100 },
+          { key: "load_N", label: "끝단 인장 하중", unit: "N", kind: "value", value: 100000 },
+          { key: "E_MPa", label: "탄성계수", unit: "MPa", kind: "value", value: 10000 },
+          { key: "lc_mm", label: "메시 크기", unit: "mm", kind: "value", value: 10 },
+        ],
+      },
+    ],
+    theory: (v) => {
+      // 축 방향 인장 변위 δ = F L / (E A) 를 허용값 이하로 만드는 최소 지름
+      const sqPart = (v.load_N * v.L_sq) / (v.E_MPa * v.sq_w * v.sq_h);
+      const rest = v.u_limit_mm - sqPart; // 사각 구간이 쓰고 남은 허용 변위
+      if (!isFinite(rest)) return null;
+      if (rest <= 0) {
+        return `사각 구간만으로도 변위가 약 ${sqPart.toFixed(2)} mm라서 허용 변위를 넘어요. 지름을 바꿔도 합격할 수 없어요.`;
+      }
+      const A = (v.load_N * (v.L_total - v.L_sq)) / (v.E_MPa * rest);
+      const d = Math.sqrt((4 * A) / Math.PI);
+      return `축 방향 인장 이론(δ = FL/EA)으로 계산한 최소 지름은 약 ${d.toFixed(1)} mm예요. 집중 절점력의 영향으로 해석 결과는 이보다 조금 커요(예: 약 60 mm).`;
+    },
+  },
+
   beam: {
     title: "외팔보",
     sections: [
