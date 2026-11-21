@@ -128,6 +128,10 @@ function Result() {
     status: h.status || (h.feasible ? "ok" : "bad"),
   }));
 
+  // 반복 횟수에 따라 차트 폭을 조절해 큰 모니터에서도 막대가 과하게 늘어나지 않도록 합니다.
+  // 반복이 적으면 컴팩트하게, 반복이 많으면 최대 960px까지만 넓어집니다.
+  const chartMaxWidth = Math.min(960, Math.max(500, chartData.length * 48 + 120));
+
   // 값 차이가 20배 넘게 크면 세로 축을 로그 눈금으로 바꿔요
   const nums = chartData.map((d) => d.value).filter((v) => v !== null && v > 0);
   const maxV = nums.length > 0 ? Math.max(...nums) : 1;
@@ -180,8 +184,8 @@ function Result() {
 
       {/* 반복 기록 차트 */}
       <h3 style={{ marginTop: 32 }}>반복별 {metric}</h3>
-      <div style={{ width: "100%", height: 320 }}>
-        <ResponsiveContainer>
+      <div style={{ width: "100%", maxWidth: chartMaxWidth, height: 270 }}>
+        <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis
@@ -206,7 +210,7 @@ function Result() {
                 fill: "#2e7d32",
               }}
             />
-            <Bar dataKey="value">
+            <Bar dataKey="value" maxBarSize={28}>
               {chartData.map((d) => (
                 <Cell key={d.eval} fill={STATUS_COLOR[d.status]} />
               ))}
